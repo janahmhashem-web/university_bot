@@ -3,3 +3,5 @@ venv/
 credentials.json
 __pycache__/
 *.pyc
+creds.json
+creds_oneline.json
