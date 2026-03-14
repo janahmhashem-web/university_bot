@@ -23,39 +23,55 @@ class GoogleSheetsClient:
             creds = None
             logger.info("🔍 بدء محاولة الاتصال بـ Google Sheets")
 
-            # 1. محاولة قراءة المتغير Base64 (الأولوية القصوى)
-            creds_b64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
-            logger.info(f"📦 creds_b64 موجود؟ {creds_b64 is not None}")
-            if creds_b64:
-                logger.info(f"📏 طول base64: {len(creds_b64)}")
-                logger.info(f"🔤 أول 50 حرف: {creds_b64[:50]}")
+            # 1. محاولة قراءة المتغيرات المنفردة (الأولوية القصوى)
+            logger.info("📦 محاولة قراءة المتغيرات المنفردة...")
+            private_key = os.getenv('GOOGLE_PRIVATE_KEY')
+            client_email = os.getenv('GOOGLE_CLIENT_EMAIL')
+            project_id = os.getenv('GOOGLE_PROJECT_ID')
+            private_key_id = os.getenv('GOOGLE_PRIVATE_KEY_ID')
+            client_id = os.getenv('GOOGLE_CLIENT_ID')
+            auth_uri = os.getenv('GOOGLE_AUTH_URI', 'https://accounts.google.com/o/oauth2/auth')
+            token_uri = os.getenv('GOOGLE_TOKEN_URI', 'https://oauth2.googleapis.com/token')
+            auth_provider_x509_cert_url = os.getenv('GOOGLE_AUTH_PROVIDER_CERT_URL', 'https://www.googleapis.com/oauth2/v1/certs')
+            client_x509_cert_url = os.getenv('GOOGLE_CLIENT_CERT_URL')
+            universe_domain = os.getenv('GOOGLE_UNIVERSE_DOMAIN', 'googleapis.com')
+
+            if private_key and client_email:
                 try:
-                    json_bytes = base64.b64decode(creds_b64)
-                    info = json.loads(json_bytes)
+                    info = {
+                        "type": "service_account",
+                        "project_id": project_id,
+                        "private_key_id": private_key_id,
+                        "private_key": private_key,
+                        "client_email": client_email,
+                        "client_id": client_id,
+                        "auth_uri": auth_uri,
+                        "token_uri": token_uri,
+                        "auth_provider_x509_cert_url": auth_provider_x509_cert_url,
+                        "client_x509_cert_url": client_x509_cert_url,
+                        "universe_domain": universe_domain
+                    }
                     creds = Credentials.from_service_account_info(info, scopes=self.scope)
-                    logger.info("✅ تم تحميل بيانات الاعتماد من base64")
+                    logger.info("✅ تم تحميل بيانات الاعتماد من المتغيرات المنفردة")
                 except Exception as e:
-                    logger.error(f"❌ فشل فك base64: {e}")
+                    logger.error(f"❌ فشل بناء الاعتماد من المتغيرات المنفردة: {e}")
 
-            # 2. إذا فشل Base64، جرب JSON العادي
+            # 2. إذا فشلت المتغيرات المنفردة، جرب Base64 (كحل احتياطي)
             if not creds:
-                creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
-                logger.info(f"📦 creds_json موجود؟ {creds_json is not None}")
-                if creds_json:
-                    logger.info(f"📏 طول JSON: {len(creds_json)}")
-                    logger.info(f"🔤 أول 50 حرف: {creds_json[:50]}")
+                creds_b64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
+                if creds_b64:
                     try:
-                        info = json.loads(creds_json)
+                        json_bytes = base64.b64decode(creds_b64)
+                        info = json.loads(json_bytes)
                         creds = Credentials.from_service_account_info(info, scopes=self.scope)
-                        logger.info("✅ تم تحميل بيانات الاعتماد من JSON")
+                        logger.info("✅ تم تحميل بيانات الاعتماد من base64")
                     except Exception as e:
-                        logger.error(f"❌ فشل تحليل JSON: {e}")
+                        logger.error(f"❌ فشل فك base64: {e}")
 
-            # 3. كحل أخير، جرب قراءة الملف من Volume
+            # 3. إذا فشل كل شيء، جرب الملف (كحل أخير)
             if not creds:
                 file_path = '/volumes/credentials.json'
                 if os.path.exists(file_path):
-                    logger.info(f"📁 محاولة قراءة الملف: {file_path}")
                     try:
                         creds = Credentials.from_service_account_file(file_path, scopes=self.scope)
                         logger.info("✅ تم تحميل بيانات الاعتماد من الملف")
@@ -75,6 +91,7 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال: {e}")
             raise
 
+    # ======================= دوال الوصول إلى الأوراق =======================
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
