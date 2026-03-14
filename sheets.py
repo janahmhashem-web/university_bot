@@ -8,8 +8,6 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class GoogleSheetsClient:
-    """عميل Google Sheets يعتمد فقط على المتغير البيئي GOOGLE_CREDENTIALS_JSON"""
-
     def __init__(self):
         self.client = None
         self.spreadsheet = None
@@ -20,8 +18,8 @@ class GoogleSheetsClient:
         self.connect()
 
     def connect(self):
-        """الاتصال باستخدام بيانات الاعتماد من المتغير البيئي"""
         try:
+            # استخدام المتغير البيئي فقط
             creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
             if not creds_json:
                 raise ValueError("المتغير البيئي GOOGLE_CREDENTIALS_JSON غير موجود!")
@@ -41,9 +39,6 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال: {e}")
             raise
 
-    # باقي الدوال (get_worksheet, ensure_sheets_exist, get_all_records, ...)
-    # أنسخها كما هي من النسخة السابقة (احتفظ بكل الدوال الأخرى دون تغيير)
-    # [هنا ضع كل الدوال الأخرى من الملف السابق]
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -57,12 +52,14 @@ class GoogleSheetsClient:
                 ws = self.spreadsheet.add_worksheet(sheet, 100, 26)
                 logger.info(f"✅ تم إنشاء ورقة: {sheet}")
                 if sheet == Config.SHEET_MANAGER:
-                    headers = ['Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
-                               'القسم', 'نوع المعاملة', 'المرافقات', 'ID', 'الحالة', 'الأولوية',
-                               'الموظف المسؤول', 'المؤسسة الحالية', 'المؤسسة التالية', 'تاريخ التحويل',
-                               'سبب التحويل', 'الموافق', 'ملاحظات إضافية', 'آخر إجراء', 'التأخير',
-                               'المستمسكات المطلوبة', 'الرابط', 'آخر تعديل بواسطة', 'آخر تعديل بتاريخ',
-                               'عدد التعديلات', 'البريد الإلكتروني الموظف', 'LOG_JSON']
+                    headers = [
+                        'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
+                        'القسم', 'نوع المعاملة', 'المرافقات', 'ID', 'الحالة', 'الأولوية',
+                        'الموظف المسؤول', 'المؤسسة الحالية', 'المؤسسة التالية', 'تاريخ التحويل',
+                        'سبب التحويل', 'الموافق', 'ملاحظات إضافية', 'آخر إجراء', 'التأخير',
+                        'المستمسكات المطلوبة', 'الرابط', 'آخر تعديل بواسطة', 'آخر تعديل بتاريخ',
+                        'عدد التعديلات', 'البريد الإلكتروني الموظف', 'LOG_JSON'
+                    ]
                     ws.append_row(headers)
                 elif sheet == Config.SHEET_QR:
                     ws.append_row(['الطابع الزمني', 'اسم صاحب المعاملة', 'ID', 'الرابط', 'QR Code', 'رابط الصورة'])
@@ -71,9 +68,11 @@ class GoogleSheetsClient:
                     ws.append_row(mgr_headers + ['تاريخ الأرشفة'])
                 elif sheet == Config.SHEET_HISTORY:
                     mgr_headers = self.get_worksheet(Config.SHEET_MANAGER).row_values(1)
-                    hist_headers = mgr_headers + ['المؤسسة السابقة', 'المؤسسة الحالية بعد النقل',
-                                                   'الموظف المسؤول', 'الإجراء', 'نوع الإجراء',
-                                                   'تاريخ التتبع', 'رابط المعاملة']
+                    hist_headers = mgr_headers + [
+                        'المؤسسة السابقة', 'المؤسسة الحالية بعد النقل',
+                        'الموظف المسؤول', 'الإجراء', 'نوع الإجراء',
+                        'تاريخ التتبع', 'رابط المعاملة'
+                    ]
                     ws.append_row(hist_headers)
 
     def get_all_records(self, sheet_name):

@@ -6,8 +6,9 @@ import os
 from flask import Flask, request, jsonify, render_template_string
 from telegram_bot import TransactionBot
 from sheets import GoogleSheetsClient
+from config import Config
+from datetime import datetime
 
-# إعداد التسجيل
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -15,11 +16,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# إعداد Flask
-app = Flask(__name__)
-sheets_client = GoogleSheetsClient()
+# تهيئة Google Sheets Client
+try:
+    sheets_client = GoogleSheetsClient()
+    logger.info("✅ تم الاتصال بـ Google Sheets")
+except Exception as e:
+    logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
+    sheets_client = None
 
-# صفحة HTML الرئيسية (قائمة المعاملات)
+app = Flask(__name__)
+
+# ---------- واجهة HTML ----------
 INDEX_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -61,7 +68,6 @@ fetch('/api/transactions')
 </html>
 """
 
-# صفحة HTML لتعديل معاملة واحدة
 EDIT_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -97,9 +103,7 @@ fetch(`/api/transaction/${id}`)
     .then(r => r.json())
     .then(data => {
         let html = '';
-        // الحقول للقراءة فقط
         const readonlyFields = ['الطابع الزمني', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني', 'القسم', 'نوع المعاملة', 'المرافقات'];
-        // باقي الحقول قابلة للتعديل
         for (let key in data) {
             if (key.startsWith('_')) continue;
             if (readonlyFields.includes(key)) {
@@ -163,7 +167,7 @@ function escapeHtml(unsafe) {
 </html>
 """
 
-# ======================== مسارات Flask ========================
+# ---------- مسارات API ----------
 @app.route('/')
 def index():
     return render_template_string(INDEX_HTML)
@@ -174,6 +178,8 @@ def edit_transaction_page(id):
 
 @app.route('/api/transactions')
 def api_transactions():
+    if not sheets_client:
+        return jsonify([])
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
     result = []
     for r in records:
@@ -187,6 +193,8 @@ def api_transactions():
 
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
+    if not sheets_client:
+        return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
     if request.method == 'GET':
         data = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
         if not data:
@@ -209,7 +217,6 @@ def api_transaction(id):
             ws.update_cell(row, col, datetime.now().isoformat())
         return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
-# ======================== تشغيل البوت والخادم معاً ========================
 def run_bot():
     bot = TransactionBot()
     bot.run()
