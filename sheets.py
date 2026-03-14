@@ -8,44 +8,42 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class GoogleSheetsClient:
+    """عميل Google Sheets يعتمد فقط على المتغير البيئي GOOGLE_CREDENTIALS_JSON"""
+
     def __init__(self):
         self.client = None
         self.spreadsheet = None
+        self.scope = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
         self.connect()
 
     def connect(self):
+        """الاتصال باستخدام بيانات الاعتماد من المتغير البيئي"""
         try:
-            scope = [
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive'
-            ]
-            # محاولة قراءة بيانات الاعتماد من متغير بيئي أولاً (لـ Railway)
             creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
-            if creds_json:
-                # إذا وجدنا متغير بيئي، نستخدمه
-                try:
-                    info = json.loads(creds_json)
-                    creds = Credentials.from_service_account_info(info, scopes=scope)
-                    logger.info("✅ تم الاتصال باستخدام متغير GOOGLE_CREDENTIALS_JSON")
-                except Exception as e:
-                    logger.error(f"❌ فشل في تحليل GOOGLE_CREDENTIALS_JSON: {e}")
-                    raise
-            else:
-                # إذا لم يكن هناك متغير، نستخدم الملف المحلي
-                creds = Credentials.from_service_account_file(
-                    Config.GOOGLE_CREDENTIALS_FILE,
-                    scopes=scope
-                )
-                logger.info("✅ تم الاتصال باستخدام ملف credentials.json")
+            if not creds_json:
+                raise ValueError("المتغير البيئي GOOGLE_CREDENTIALS_JSON غير موجود!")
+
+            info = json.loads(creds_json)
+            creds = Credentials.from_service_account_info(info, scopes=self.scope)
+            logger.info("✅ تم تحميل بيانات الاعتماد من المتغير البيئي")
 
             self.client = gspread.authorize(creds)
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
             logger.info("✅ متصل بـ Google Sheets")
+
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ خطأ في فك ترميز JSON: {e}")
+            raise
         except Exception as e:
             logger.error(f"❌ فشل الاتصال: {e}")
             raise
 
-    # باقي الدوال كما هي (get_worksheet, ensure_sheets_exist, ...)
+    # باقي الدوال (get_worksheet, ensure_sheets_exist, get_all_records, ...)
+    # أنسخها كما هي من النسخة السابقة (احتفظ بكل الدوال الأخرى دون تغيير)
+    # [هنا ضع كل الدوال الأخرى من الملف السابق]
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -59,7 +57,7 @@ class GoogleSheetsClient:
                 ws = self.spreadsheet.add_worksheet(sheet, 100, 26)
                 logger.info(f"✅ تم إنشاء ورقة: {sheet}")
                 if sheet == Config.SHEET_MANAGER:
-                    headers = ['الطابع الزمني', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
+                    headers = ['Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
                                'القسم', 'نوع المعاملة', 'المرافقات', 'ID', 'الحالة', 'الأولوية',
                                'الموظف المسؤول', 'المؤسسة الحالية', 'المؤسسة التالية', 'تاريخ التحويل',
                                'سبب التحويل', 'الموافق', 'ملاحظات إضافية', 'آخر إجراء', 'التأخير',
