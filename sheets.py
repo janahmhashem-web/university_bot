@@ -19,25 +19,40 @@ class GoogleSheetsClient:
 
     def connect(self):
         try:
-            # استخدام المتغير البيئي فقط
-            creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
-            if not creds_json:
-                raise ValueError("المتغير البيئي GOOGLE_CREDENTIALS_JSON غير موجود!")
+            # ✅ تسجيل أسماء جميع المتغيرات البيئية (للتشخيص)
+            logger.info(f"📋 جميع المتغيرات البيئية المتوفرة: {list(os.environ.keys())}")
 
-            info = json.loads(creds_json)
+            # ✅ قراءة المتغير البيئي (طريقة آمنة)
+            creds_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+            logger.info(f"🔍 GOOGLE_CREDENTIALS_JSON موجود؟ {creds_json is not None}")
+            if creds_json:
+                logger.info(f"🔍 طول القيمة: {len(creds_json)} حرف")
+            else:
+                # 🔴 في حالة عدم وجود المتغير، نسجل خطأ ونرفع استثناء
+                raise ValueError("❌ المتغير البيئي GOOGLE_CREDENTIALS_JSON غير موجود!")
+
+            # ✅ تحويل JSON إلى قاموس
+            try:
+                info = json.loads(creds_json)
+                logger.info("✅ تم فك ترميز JSON بنجاح")
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ فشل فك ترميز JSON: {e}")
+                raise
+
+            # ✅ إنشاء بيانات الاعتماد
             creds = Credentials.from_service_account_info(info, scopes=self.scope)
             logger.info("✅ تم تحميل بيانات الاعتماد من المتغير البيئي")
 
+            # ✅ الاتصال بـ gspread
             self.client = gspread.authorize(creds)
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
             logger.info("✅ متصل بـ Google Sheets")
 
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ خطأ في فك ترميز JSON: {e}")
-            raise
         except Exception as e:
             logger.error(f"❌ فشل الاتصال: {e}")
             raise
+
+    # ======================= باقي الدوال (بدون تغيير) =======================
 
     def get_worksheet(self, sheet_name):
         try:
