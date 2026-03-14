@@ -1,6 +1,8 @@
 import gspread
 from google.oauth2.service_account import Credentials
 import logging
+import json
+import os
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -17,10 +19,25 @@ class GoogleSheetsClient:
                 'https://www.googleapis.com/auth/spreadsheets',
                 'https://www.googleapis.com/auth/drive'
             ]
-            creds = Credentials.from_service_account_file(
-                Config.GOOGLE_CREDENTIALS_FILE,
-                scopes=scope
-            )
+            # محاولة قراءة بيانات الاعتماد من متغير بيئي أولاً (لـ Railway)
+            creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+            if creds_json:
+                # إذا وجدنا متغير بيئي، نستخدمه
+                try:
+                    info = json.loads(creds_json)
+                    creds = Credentials.from_service_account_info(info, scopes=scope)
+                    logger.info("✅ تم الاتصال باستخدام متغير GOOGLE_CREDENTIALS_JSON")
+                except Exception as e:
+                    logger.error(f"❌ فشل في تحليل GOOGLE_CREDENTIALS_JSON: {e}")
+                    raise
+            else:
+                # إذا لم يكن هناك متغير، نستخدم الملف المحلي
+                creds = Credentials.from_service_account_file(
+                    Config.GOOGLE_CREDENTIALS_FILE,
+                    scopes=scope
+                )
+                logger.info("✅ تم الاتصال باستخدام ملف credentials.json")
+
             self.client = gspread.authorize(creds)
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
             logger.info("✅ متصل بـ Google Sheets")
@@ -28,6 +45,7 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال: {e}")
             raise
 
+    # باقي الدوال كما هي (get_worksheet, ensure_sheets_exist, ...)
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
