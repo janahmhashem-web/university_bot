@@ -121,5 +121,10 @@ class TransactionBot:
 
     def run(self):
         self.sheets.ensure_sheets_exist()
-        logger.info("✅ البوت جاهز")
-        self.app.run_polling()
+        logger.info("✅ البوت جاهز مع Webhook")
+        self.app.run_webhook(
+            listen="0.0.0.0",
+            port=8080,
+            url_path="webhook",
+            webhook_url=f"{Config.WEB_APP_URL}/webhook"
+        )

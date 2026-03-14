@@ -11,15 +11,17 @@ class Config:
 
     # Google Sheets
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
-    GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')  # سيتم استخدامه في sheets.py
 
-    # Email (اختياري)
+    # Web App URL
+    WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://universitybot-production.up.railway.app')
+
+    # Email
     EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
     EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
     EMAIL_USER = os.getenv('EMAIL_USER', '')
     EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
 
-    # أسماء الأوراق في الشيت
+    # Sheet names
     SHEET_MANAGER = "manager"
     SHEET_QR = "QR"
     SHEET_ARCHIVE = "Archive"

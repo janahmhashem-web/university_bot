@@ -2,11 +2,14 @@
 import logging
 import sys
 import threading
+import time
 import os
 from flask import Flask, request, jsonify, render_template_string
 from telegram_bot import TransactionBot
 from sheets import GoogleSheetsClient
 from config import Config
+from email_service import EmailService
+from qr_generator import QRGenerator
 from datetime import datetime
 
 logging.basicConfig(
@@ -26,7 +29,65 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# ---------- واجهة HTML ----------
+# ---------- متغيرات لمراقبة المعاملات الجديدة ----------
+last_row_count = 0
+
+def monitor_new_transactions():
+    global last_row_count
+    while True:
+        try:
+            if not sheets_client:
+                time.sleep(30)
+                continue
+            records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+            current_count = len(records)
+            if current_count > last_row_count:
+                logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
+                for i in range(last_row_count, current_count):
+                    new_row = records[i]
+                    transaction_id = new_row.get('ID')
+                    customer_email = new_row.get('البريد الإلكتروني')
+                    customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
+                    if transaction_id and customer_email:
+                        qr_url = QRGenerator.get_qr_url(f"{Config.WEB_APP_URL}?id={transaction_id}")
+                        EmailService.send_customer_email(
+                            customer_email,
+                            customer_name,
+                            transaction_id,
+                            qr_url
+                        )
+                        logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
+                last_row_count = current_count
+        except Exception as e:
+            logger.error(f"❌ خطأ في مراقبة المعاملات: {e}")
+        time.sleep(30)
+
+# ---------- إنشاء البوت وبدء Webhook ----------
+bot = TransactionBot()
+bot_thread = threading.Thread(target=bot.run, daemon=True)
+bot_thread.start()
+
+if sheets_client:
+    try:
+        last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
+    except:
+        last_row_count = 0
+    monitor_thread = threading.Thread(target=monitor_new_transactions, daemon=True)
+    monitor_thread.start()
+    logger.info("🔍 بدأت مراقبة المعاملات الجديدة")
+
+# ---------- مسار Webhook لتلقي تحديثات Telegram ----------
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    from telegram import Update
+    try:
+        update = Update.de_json(request.get_json(force=True), bot.app.bot)
+        bot.app.update_queue.put(update)
+    except Exception as e:
+        logger.error(f"❌ خطأ في معالجة Webhook: {e}")
+    return 'OK', 200
+
+# ---------- واجهة HTML (كما هي) ----------
 INDEX_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -167,7 +228,7 @@ function escapeHtml(unsafe) {
 </html>
 """
 
-# ---------- مسارات API ----------
+# ---------- مسارات API (نفسها) ----------
 @app.route('/')
 def index():
     return render_template_string(INDEX_HTML)
@@ -211,20 +272,11 @@ def api_transaction(id):
         for key, value in updates.items():
             col = headers.index(key) + 1
             ws.update_cell(row, col, value)
-        # تحديث آخر تعديل
         if 'آخر تعديل بتاريخ' in headers:
             col = headers.index('آخر تعديل بتاريخ') + 1
             ws.update_cell(row, col, datetime.now().isoformat())
         return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
-def run_bot():
-    bot = TransactionBot()
-    bot.run()
-
 if __name__ == "__main__":
-    # تشغيل البوت في خيط منفصل
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    # تشغيل خادم الويب
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)

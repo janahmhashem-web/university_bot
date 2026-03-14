@@ -23,8 +23,7 @@ class GoogleSheetsClient:
             creds = None
             logger.info("🔍 بدء محاولة الاتصال بـ Google Sheets")
 
-            # 1. محاولة قراءة المتغيرات المنفردة (الأولوية القصوى)
-            logger.info("📦 محاولة قراءة المتغيرات المنفردة...")
+            # 1. محاولة قراءة المتغيرات المنفردة
             private_key = os.getenv('GOOGLE_PRIVATE_KEY')
             client_email = os.getenv('GOOGLE_CLIENT_EMAIL')
             project_id = os.getenv('GOOGLE_PROJECT_ID')
@@ -56,7 +55,7 @@ class GoogleSheetsClient:
                 except Exception as e:
                     logger.error(f"❌ فشل بناء الاعتماد من المتغيرات المنفردة: {e}")
 
-            # 2. إذا فشلت المتغيرات المنفردة، جرب Base64 (كحل احتياطي)
+            # 2. إذا فشلت، جرب Base64 (احتياطي)
             if not creds:
                 creds_b64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
                 if creds_b64:
@@ -68,7 +67,7 @@ class GoogleSheetsClient:
                     except Exception as e:
                         logger.error(f"❌ فشل فك base64: {e}")
 
-            # 3. إذا فشل كل شيء، جرب الملف (كحل أخير)
+            # 3. كحل أخير، جرب الملف
             if not creds:
                 file_path = '/volumes/credentials.json'
                 if os.path.exists(file_path):
@@ -91,7 +90,7 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال: {e}")
             raise
 
-    # ======================= دوال الوصول إلى الأوراق =======================
+    # ========== دوال الوصول إلى الأوراق (كما هي سابقاً) ==========
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -131,6 +130,13 @@ class GoogleSheetsClient:
     def get_all_records(self, sheet_name):
         ws = self.get_worksheet(sheet_name)
         return ws.get_all_records() if ws else []
+
+    def get_last_row(self):
+        ws = self.get_worksheet(Config.SHEET_MANAGER)
+        if not ws:
+            return None
+        all_records = ws.get_all_records()
+        return all_records[-1] if all_records else None
 
     def append_row(self, sheet_name, row_data):
         ws = self.get_worksheet(sheet_name)
