@@ -30,9 +30,15 @@ class GoogleSheetsClient:
         try:
             creds = None
 
+            # ---------- تسجيل معلومات للتشخيص ----------
+            logger.info("🔍 بدء محاولة الاتصال بـ Google Sheets")
+            env_vars = [k for k in os.environ.keys() if 'GOOGLE' in k or 'CRED' in k]
+            logger.info(f"📋 المتغيرات البيئية ذات الصلة: {env_vars}")
+
             # 1. المحاولة من المتغير Base64 (الأكثر أماناً)
             creds_b64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
             if creds_b64:
+                logger.info(f"📏 طول base64: {len(creds_b64)}")
                 try:
                     json_bytes = base64.b64decode(creds_b64)
                     info = json.loads(json_bytes)
@@ -45,6 +51,9 @@ class GoogleSheetsClient:
             if not creds:
                 creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
                 if creds_json:
+                    logger.info(f"📏 طول JSON: {len(creds_json)}")
+                    logger.info(f"🔍 أول 100 حرف: {creds_json[:100]}")
+                    logger.info(f"🔍 آخر 100 حرف: {creds_json[-100:]}")
                     try:
                         info = json.loads(creds_json)
                         creds = Credentials.from_service_account_info(info, scopes=self.scope)
@@ -56,10 +65,17 @@ class GoogleSheetsClient:
             if not creds:
                 file_path = '/volumes/credentials.json'
                 if os.path.exists(file_path):
-                    creds = Credentials.from_service_account_file(file_path, scopes=self.scope)
-                    logger.info("✅ تم تحميل بيانات الاعتماد من الملف")
+                    logger.info(f"📁 محاولة قراءة الملف: {file_path}")
+                    try:
+                        creds = Credentials.from_service_account_file(file_path, scopes=self.scope)
+                        logger.info("✅ تم تحميل بيانات الاعتماد من الملف")
+                    except Exception as e:
+                        logger.error(f"❌ فشل قراءة الملف: {e}")
                 else:
-                    raise ValueError("لا يوجد مصدر موثوق لبيانات الاعتماد!")
+                    logger.warning("⚠️ ملف الاعتماد غير موجود في المسار المتوقع")
+
+            if not creds:
+                raise ValueError("❌ لا يوجد مصدر موثوق لبيانات الاعتماد!")
 
             # الاتصال باستخدام gspread
             self.client = gspread.authorize(creds)
@@ -113,8 +129,6 @@ class GoogleSheetsClient:
                         'تاريخ التتبع', 'رابط المعاملة'
                     ]
                     ws.append_row(hist_headers)
-
-    # ======================= دوال القراءة والكتابة الأساسية =======================
 
     def get_all_records(self, sheet_name):
         """جلب جميع السجلات من ورقة معينة كقائمة من القواميس"""
