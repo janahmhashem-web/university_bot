@@ -3,13 +3,11 @@ import logging
 import sys
 import os
 import json
-import asyncio
 import threading
 import time
-import traceback
 from flask import Flask, request, jsonify, render_template_string
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram import Bot, Update
+from telegram.ext import Dispatcher, CommandHandler
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
@@ -39,9 +37,12 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# ---------- دوال البوت الكاملة ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📨 أمر /start من المستخدم {update.effective_user.id}")
+# ---------- إعداد البوت باستخدام Dispatcher ----------
+bot = Bot(token=Config.TELEGRAM_BOT_TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0, use_context=True)
+
+# ---------- دوال البوت (Handlers) ----------
+def start(update, context):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
@@ -53,13 +54,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin:
         msg += "\n👑 *أوامر المدير:*\n"
         msg += "🔹 /stats - إحصائيات\n"
-    await update.message.reply_text(msg, parse_mode='Markdown')
-    logger.info("✅ تم الرد على /start")
+    update.message.reply_text(msg, parse_mode='Markdown')
 
-async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📨 أمر /id من المستخدم {update.effective_user.id}")
+def get_id(update, context):
     if not sheets_client:
-        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات حالياً.")
+        update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات حالياً.")
         return
     if context.args:
         transaction_id = context.args[0]
@@ -69,23 +68,22 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
             for key, value in data.items():
                 msg += f"• {key}: {value}\n"
-            await update.message.reply_text(msg, parse_mode='Markdown')
+            update.message.reply_text(msg, parse_mode='Markdown')
         else:
-            await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
+            update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
     else:
-        await update.message.reply_text("الرجاء إدخال رقم المعاملة: /id 123")
+        update.message.reply_text("الرجاء إدخال رقم المعاملة: /id 123")
 
-async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📨 أمر /history من المستخدم {update.effective_user.id}")
+def get_history(update, context):
     if not sheets_client:
-        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
     if context.args:
         transaction_id = context.args[0]
         try:
             ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
             if not ws:
-                await update.message.reply_text("❌ لا يوجد سجل تاريخ.")
+                update.message.reply_text("❌ لا يوجد سجل تاريخ.")
                 return
             records = ws.get_all_records()
             history = [r for r in records if str(r.get('ID')) == transaction_id]
@@ -93,19 +91,18 @@ async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n"
                 for entry in history:
                     msg += f"• {entry.get('تاريخ', '')}: {entry.get('حالة', '')}\n"
-                await update.message.reply_text(msg, parse_mode='Markdown')
+                update.message.reply_text(msg, parse_mode='Markdown')
             else:
-                await update.message.reply_text(f"لا يوجد سجل للمعاملة {transaction_id}")
+                update.message.reply_text(f"لا يوجد سجل للمعاملة {transaction_id}")
         except Exception as e:
             logger.error(f"خطأ في history: {e}")
-            await update.message.reply_text("حدث خطأ أثناء جلب السجل.")
+            update.message.reply_text("حدث خطأ أثناء جلب السجل.")
     else:
-        await update.message.reply_text("الرجاء إدخال رقم المعاملة: /history 123")
+        update.message.reply_text("الرجاء إدخال رقم المعاملة: /history 123")
 
-async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📨 أمر /search من المستخدم {update.effective_user.id}")
+def search(update, context):
     if not sheets_client:
-        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
     if context.args:
         keyword = ' '.join(context.args)
@@ -115,103 +112,57 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if keyword in str(r.values()):
                 found.append(r.get('ID', ''))
         if found:
-            await update.message.reply_text(f"🔎 المعاملات التي تحتوي على '{keyword}':\n" + "\n".join(found[:10]))
+            update.message.reply_text(f"🔎 المعاملات التي تحتوي على '{keyword}':\n" + "\n".join(found[:10]))
         else:
-            await update.message.reply_text("لا توجد نتائج.")
+            update.message.reply_text("لا توجد نتائج.")
     else:
-        await update.message.reply_text("الرجاء إدخال كلمة للبحث: /search كلمة")
+        update.message.reply_text("الرجاء إدخال كلمة للبحث: /search كلمة")
 
-async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📨 أمر /wake من المستخدم {update.effective_user.id}")
-    await update.message.reply_text("✅ البوت نشط وجاهز!")
+def wake(update, context):
+    update.message.reply_text("✅ البوت نشط وجاهز!")
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📨 أمر /stats من المستخدم {update.effective_user.id}")
+def stats(update, context):
     user_id = update.effective_user.id
     if user_id != Config.ADMIN_CHAT_ID:
-        await update.message.reply_text("⛔ هذا الأمر متاح فقط للمدير.")
+        update.message.reply_text("⛔ هذا الأمر متاح فقط للمدير.")
         return
     if not sheets_client:
-        await update.message.reply_text("⚠️ غير متصل بقاعدة البيانات.")
+        update.message.reply_text("⚠️ غير متصل بقاعدة البيانات.")
         return
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
     total = len(records)
-    await update.message.reply_text(f"📊 *إحصائيات*\nإجمالي المعاملات: {total}", parse_mode='Markdown')
+    update.message.reply_text(f"📊 *إحصائيات*\nإجمالي المعاملات: {total}", parse_mode='Markdown')
 
-# دالة تشخيصية تستجيب لأي رسالة نصية
-async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"📨 رسالة نصية: {update.message.text}")
-    await update.message.reply_text(f"استقبلت: {update.message.text}")
-
-# ---------- إعداد البوت ----------
-bot_app = None
-if Config.TELEGRAM_BOT_TOKEN:
-    try:
-        bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-        # إضافة جميع المعالجات
-        bot_app.add_handler(CommandHandler("start", start))
-        bot_app.add_handler(CommandHandler("id", get_id))
-        bot_app.add_handler(CommandHandler("history", get_history))
-        bot_app.add_handler(CommandHandler("search", search))
-        bot_app.add_handler(CommandHandler("wake", wake))
-        bot_app.add_handler(CommandHandler("stats", stats))
-        # معالج لأي رسالة نصية (للتأكد من وصول التحديثات)
-        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
-        logger.info("✅ تم بناء البوت وإضافة جميع المعالجات")
-
-        # تهيئة البوت مرة واحدة (لا نستخدم start() لأنه يبدأ polling)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot_app.initialize())
-        loop.close()
-        logger.info("✅ تم تهيئة البوت")
-    except Exception as e:
-        logger.error(f"❌ فشل تهيئة البوت: {e}")
-        bot_app = None
+# تسجيل الأوامر في dispatcher
+dispatcher.add_handler(CommandHandler('start', start))
+dispatcher.add_handler(CommandHandler('id', get_id))
+dispatcher.add_handler(CommandHandler('history', get_history))
+dispatcher.add_handler(CommandHandler('search', search))
+dispatcher.add_handler(CommandHandler('wake', wake))
+dispatcher.add_handler(CommandHandler('stats', stats))
 
 # ---------- Webhook ----------
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    logger.info("📩 تم استقبال طلب webhook")
-    if bot_app is None:
-        logger.error("bot_app is None")
-        return "Bot not initialized", 500
     try:
-        # قراءة البيانات
         json_str = request.get_data(as_text=True)
-        logger.debug(f"البيانات: {json_str[:200]}...")
-        update = Update.de_json(json.loads(json_str), bot_app.bot)
-        # إنشاء حلقة أحداث جديدة لمعالجة التحديث (آمن للاستخدام في خيوط Flask)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(bot_app.process_update(update))
-            logger.info("✅ تمت معالجة التحديث بنجاح")
-        except Exception as e:
-            logger.error(f"❌ خطأ أثناء معالجة التحديث: {e}\n{traceback.format_exc()}")
-        finally:
-            loop.close()
-        return "OK"
+        update = Update.de_json(json.loads(json_str), bot)
+        dispatcher.process_update(update)
+        return 'OK'
     except Exception as e:
-        logger.error(f"❌ خطأ في webhook: {e}\n{traceback.format_exc()}")
-        return "Error", 500
+        logger.error(f"خطأ في webhook: {e}")
+        return 'Error', 500
 
-# تعيين webhook باستخدام requests (متزامن)
-def set_webhook_sync():
-    if bot_app is None or not Config.WEB_APP_URL:
-        logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
-        return
+@app.route('/ping')
+def ping():
+    return 'pong'
+
+# تعيين webhook باستخدام requests (مرة واحدة عند بدء التشغيل)
+def set_webhook():
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
     token = Config.TELEGRAM_BOT_TOKEN
     try:
-        # حذف webhook القديم
-        del_resp = requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
-        if del_resp.status_code == 200:
-            logger.info("✅ تم حذف webhook القديم")
-        else:
-            logger.warning(f"⚠️ فشل حذف webhook القديم: {del_resp.text}")
-
-        # تعيين webhook الجديد
+        requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/setWebhook",
             data={"url": webhook_url}
@@ -223,11 +174,11 @@ def set_webhook_sync():
     except Exception as e:
         logger.error(f"❌ خطأ في تعيين webhook: {e}")
 
-# تأخير تعيين webhook لضمان جاهزية الخدمة
-if Config.WEB_APP_URL and bot_app:
+# تأخير بسيط لضمان جاهزية الخدمة
+if Config.WEB_APP_URL:
     def delayed_webhook():
         time.sleep(5)
-        set_webhook_sync()
+        set_webhook()
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
@@ -238,11 +189,9 @@ def check_new_transactions():
     global last_row_count
     try:
         if not sheets_client:
-            logger.warning("⏳ sheets_client غير متصل، تخطي الدورة")
             return
         records = sheets_client.get_all_records(Config.SHEET_MANAGER)
         current_count = len(records)
-        logger.info(f"📊 عدد السجلات الحالي: {current_count}, آخر عدد معروف: {last_row_count}")
         if current_count > last_row_count:
             logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
             for i in range(last_row_count, current_count):
@@ -266,15 +215,13 @@ def check_new_transactions():
                     logger.warning(f"⚠️ بيانات ناقصة للمعاملة: ID={transaction_id}, email={customer_email}, name={customer_name}")
             last_row_count = current_count
     except Exception as e:
-        logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
+        logger.error(f"❌ خطأ في دالة المراقبة: {e}")
 
 if sheets_client:
     try:
         last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
-    except Exception as e:
-        logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
+    except:
         last_row_count = 0
-
     scheduler = BackgroundScheduler()
     scheduler.start()
     scheduler.add_job(
