@@ -173,6 +173,8 @@ def webhook():
     if bot_app is None or background_loop is None:
         return "Bot not initialized", 500
     try:
+        # تسجيل وصول التحديث
+        logger.info("📩 تم استقبال طلب webhook")
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
         # جدولة معالجة التحديث في الحلقة الخلفية
