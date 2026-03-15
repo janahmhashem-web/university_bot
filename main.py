@@ -142,10 +142,9 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("stats", stats))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
         
-        # تهيئة وتشغيل البوت (ضروري قبل استخدام process_update)
+        # تهيئة البوت فقط (دون start) - مناسب للـ webhook
         asyncio.run(bot_app.initialize())
-        asyncio.run(bot_app.start())
-        logger.info("✅ تم تهيئة البوت وتشغيله")
+        logger.info("✅ تم تهيئة البوت")
     except Exception as e:
         logger.error(f"❌ فشل تهيئة البوت: {e}")
         bot_app = None
