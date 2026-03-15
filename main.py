@@ -152,8 +152,6 @@ def webhook():
     try:
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        # تشغيل process_update بشكل غير متزامن باستخدام asyncio.run
-        # (كل طلب في خيط منفصل، لذا يمكن استخدام asyncio.run بأمان)
         asyncio.run(bot_app.process_update(update))
         return "OK"
     except Exception as e:
@@ -161,7 +159,6 @@ def webhook():
         return "Error", 500
 
 def set_webhook_sync():
-    """دالة متزامنة لتعيين webhook عبر asyncio.run"""
     if bot_app is None or not Config.WEB_APP_URL:
         logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
@@ -175,7 +172,6 @@ def set_webhook_sync():
     except Exception as e:
         logger.error(f"❌ فشل تعيين webhook: {e}")
 
-# تعيين webhook مع تأخير (مرة واحدة عند بدء التشغيل)
 if Config.WEB_APP_URL and bot_app:
     def delayed_webhook():
         time.sleep(5)
@@ -194,7 +190,6 @@ def check_new_transactions():
             return
         records = sheets_client.get_all_records(Config.SHEET_MANAGER)
         current_count = len(records)
-        logger.info(f"📊 عدد السجلات الحالي: {current_count}, آخر عدد معروف: {last_row_count}")
         if current_count > last_row_count:
             logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
             for i in range(last_row_count, current_count):
@@ -220,7 +215,6 @@ def check_new_transactions():
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
-# جدولة المهمة
 if sheets_client:
     try:
         last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
