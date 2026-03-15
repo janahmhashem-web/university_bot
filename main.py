@@ -130,8 +130,11 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(records)
     await update.message.reply_text(f"📊 *إحصائيات*\nإجمالي المعاملات: {total}", parse_mode='Markdown')
 
-# ---------- إعداد البوت ----------
+# ---------- إعداد البوت وحلقة الأحداث الخلفية ----------
 bot_app = None
+background_loop = None
+loop_thread = None
+
 if Config.TELEGRAM_BOT_TOKEN:
     try:
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
@@ -143,36 +146,43 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("stats", stats))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
-        # تهيئة البوت (يجب أن تعمل مرة واحدة)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot_app.initialize())
-        loop.close()
-        logger.info("✅ تم تهيئة البوت")
+        # دالة لتهيئة البوت في حلقة خلفية
+        async def init_bot():
+            await bot_app.initialize()
+            logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
+
+        # بدء حلقة خلفية وتشغيل initialize فيها
+        def start_background_loop():
+            global background_loop
+            background_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(background_loop)
+            background_loop.run_until_complete(init_bot())
+            background_loop.run_forever()
+
+        loop_thread = threading.Thread(target=start_background_loop, daemon=True)
+        loop_thread.start()
+        logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
+        time.sleep(2)  # انتظار قصير لضمان اكتمال التهيئة
     except Exception as e:
-        logger.error(f"❌ فشل تهيئة البوت: {e}")
+        logger.error(f"❌ فشل إعداد البوت: {e}")
         bot_app = None
 
 # ---------- Webhook ----------
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if bot_app is None:
+    if bot_app is None or background_loop is None:
         return "Bot not initialized", 500
     try:
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        # إنشاء حلقة أحداث جديدة لكل طلب
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot_app.process_update(update))
-        loop.close()
+        # جدولة معالجة التحديث في الحلقة الخلفية
+        asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
         return "OK"
     except Exception as e:
         logger.error(f"خطأ في webhook: {e}")
         return "Error", 500
 
 def set_webhook_sync():
-    """تعيين webhook باستخدام requests (متزامن) مع تسجيل النتيجة"""
     if bot_app is None or not Config.WEB_APP_URL:
         logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
@@ -198,7 +208,6 @@ def set_webhook_sync():
     except Exception as e:
         logger.error(f"❌ خطأ في تعيين webhook: {e}")
 
-# تعيين webhook مع تأخير (مرة واحدة)
 if Config.WEB_APP_URL and bot_app:
     def delayed_webhook():
         time.sleep(5)
@@ -262,7 +271,39 @@ if sheets_client:
     atexit.register(lambda: scheduler.shutdown())
 
 # ---------- صفحات HTML (كما هي) ----------
-# (نفس الكود السابق، اختصاراً لم نكرره هنا لكنه موجود في الردود السابقة)
+INDEX_HTML = """<!DOCTYPE html>
+<html dir="rtl"><head><meta charset="UTF-8"><title>المعاملات</title></head>
+<body><h1>قائمة المعاملات</h1><div id="transactions"></div>
+<script>
+fetch('/api/transactions').then(r=>r.json()).then(data => {
+    let html = '<table border="1"><tr><th>ID</th><th>الاسم</th><th>الحالة</th><th>الموظف</th></tr>';
+    data.forEach(t => { html += `<tr><td>${t.id}</td><td>${t.name}</td><td>${t.status}</td><td>${t.employee}</td></tr>`; });
+    html += '</table>';
+    document.getElementById('transactions').innerHTML = html;
+});
+</script></body></html>"""
+
+EDIT_HTML = """<!DOCTYPE html>
+<html dir="rtl"><head><meta charset="UTF-8"><title>تعديل معاملة</title></head>
+<body><h1>تعديل المعاملة <span id="tid"></span></h1><div id="form"></div>
+<script>
+const id = window.location.pathname.split('/').pop();
+document.getElementById('tid').innerText = id;
+fetch(`/api/transaction/${id}`).then(r=>r.json()).then(data => {
+    let form = '<form id="editForm">';
+    for (let key in data) { form += `<label>${key}: <input name="${key}" value="${data[key]}"></label><br>`; }
+    form += '<button type="submit">حفظ</button></form>';
+    document.getElementById('form').innerHTML = form;
+    document.getElementById('editForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const updates = Object.fromEntries(formData.entries());
+        const res = await fetch(`/api/transaction/${id}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(updates) });
+        const result = await res.json();
+        alert(result.message);
+    };
+});
+</script></body></html>"""
 
 @app.route('/')
 def index():
