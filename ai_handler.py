@@ -22,7 +22,6 @@ class AIAssistant:
         if not self.model:
             return "عذراً، خدمة الذكاء الاصطناعي غير متاحة حالياً."
         
-        # بناء سياق من قاعدة البيانات (اختياري)
         context = ""
         try:
             records = self.sheets.get_all_records(Config.SHEET_MANAGER)

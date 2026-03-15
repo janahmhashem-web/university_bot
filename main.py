@@ -51,11 +51,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg += "📌 *الأوامر العامة:*\n"
     msg += "🔹 /id [رقم] - تفاصيل معاملة\n"
     msg += "🔹 /history [رقم] - سجل تتبع معاملة\n"
+    msg += "🔹 /track [رقم] - تتبع الموقع الحالي للمعاملة\n"
     msg += "🔹 /search [كلمة] - بحث في المعاملات\n"
     msg += "🔹 /wake - للتأكد من أن البوت يعمل\n"
     if is_admin:
         msg += "\n👑 *أوامر المدير:*\n"
         msg += "🔹 /stats - إحصائيات عامة\n"
+        msg += "🔹 /archive - عرض إحصائيات الأرشيف\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -68,7 +70,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if row_info:
             data = row_info['data']
             msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
-            for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
+            for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول', 'المؤسسة الحالية', 'المؤسسة التالية']:
                 if key in data:
                     msg += f"• {key}: {data[key]}\n"
             msg += f"\n🔗 [رابط المتابعة]({Config.WEB_APP_URL}/transaction/{transaction_id})"
@@ -92,11 +94,14 @@ async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             records = ws.get_all_records()
             history = [r for r in records if str(r.get('ID')) == transaction_id]
             if history:
+                # ترتيب تصاعدي حسب الوقت
+                history.sort(key=lambda x: x.get('timestamp', ''))
                 msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n"
-                for entry in history[-5:]:
+                for entry in history:
                     time_str = entry.get('timestamp', '')
                     action = entry.get('action', '')
-                    msg += f"• {time_str}: {action}\n"
+                    user = entry.get('user', '')
+                    msg += f"• {time_str} - {action} (بواسطة: {user})\n"
                 await update.message.reply_text(msg, parse_mode='Markdown')
             else:
                 await update.message.reply_text(f"لا يوجد سجل للمعاملة {transaction_id}")
@@ -105,6 +110,30 @@ async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("حدث خطأ أثناء جلب السجل.")
     else:
         await update.message.reply_text("الرجاء إدخال رقم المعاملة: /history 123")
+
+async def track(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not sheets_client:
+        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        return
+    if context.args:
+        transaction_id = context.args[0]
+        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+        if row_info:
+            data = row_info['data']
+            current_location = data.get('المؤسسة الحالية', 'غير معروف')
+            next_location = data.get('المؤسسة التالية', 'غير محددة')
+            status = data.get('الحالة', '')
+            msg = f"📍 *تتبع المعاملة {transaction_id}:*\n"
+            msg += f"الحالة: {status}\n"
+            msg += f"المؤسسة الحالية: {current_location}\n"
+            msg += f"المؤسسة التالية: {next_location}\n"
+            if status.lower() == 'مكتملة':
+                msg += "✅ المعاملة مكتملة ويمكن أرشفتها."
+            await update.message.reply_text(msg, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
+    else:
+        await update.message.reply_text("الرجاء إدخال رقم المعاملة: /track 123")
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sheets_client:
@@ -142,6 +171,23 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
+async def archive_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != Config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ هذا الأمر متاح فقط للمدير.")
+        return
+    try:
+        ws_archive = sheets_client.get_worksheet(Config.SHEET_ARCHIVE)
+        if not ws_archive:
+            await update.message.reply_text("لا يوجد شيت أرشيف.")
+            return
+        records = ws_archive.get_all_records()
+        total = len(records)
+        await update.message.reply_text(f"📦 *الأرشيف*\nإجمالي المعاملات المؤرشفة: {total}", parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"خطأ في archive_stats: {e}")
+        await update.message.reply_text("حدث خطأ أثناء جلب الأرشيف.")
+
 # ------------------ معالج الذكاء الاصطناعي ------------------
 async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
@@ -163,12 +209,13 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
+        bot_app.add_handler(CommandHandler("track", track))
         bot_app.add_handler(CommandHandler("search", search))
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
-        # معالج الذكاء الاصطناعي للرسائل النصية العادية
+        bot_app.add_handler(CommandHandler("archive", archive_stats))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat_handler))
-        logger.info("✅ تم بناء البوت وإضافة المعالجات (بما في ذلك الذكاء الاصطناعي)")
+        logger.info("✅ تم بناء البوت وإضافة المعالجات (بما في ذلك الذكاء الاصطناعي والأوامر الجديدة)")
 
         async def init_bot():
             await bot_app.initialize()
@@ -331,6 +378,43 @@ def check_new_transactions():
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
+# ------------------ أرشفة المعاملات المكتملة ------------------
+def archive_completed_transactions():
+    """نقل المعاملات المكتملة إلى شيت Archive"""
+    if not sheets_client:
+        return
+    try:
+        ws_manager = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+        ws_archive = sheets_client.get_worksheet(Config.SHEET_ARCHIVE)
+        if not ws_manager or not ws_archive:
+            logger.error("لا يمكن الوصول إلى أوراق الأرشفة")
+            return
+
+        records = ws_manager.get_all_records()
+        headers = ws_manager.row_values(1)
+        rows_to_archive = []
+        rows_to_delete = []
+
+        for i, row in enumerate(records, start=2):  # i هو رقم الصف الفعلي
+            if row.get('الحالة') == 'مكتملة':
+                rows_to_archive.append(ws_manager.row_values(i))
+                rows_to_delete.append(i)
+
+        if rows_to_archive:
+            # إضافة صفوف إلى Archive
+            for row_values in rows_to_archive:
+                ws_archive.append_row(row_values)
+                logger.info(f"📦 تم أرشفة معاملة: {row_values[7]}")  # العمود H هو ID
+
+            # حذف الصفوف من manager (من الأسفل للأعلى)
+            for row_num in sorted(rows_to_delete, reverse=True):
+                ws_manager.delete_rows(row_num)
+                logger.info(f"🗑️ تم حذف الصف {row_num} من manager")
+
+    except Exception as e:
+        logger.error(f"خطأ في الأرشفة: {e}")
+
+# ------------------ جدولة المهام ------------------
 if sheets_client:
     try:
         last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
@@ -346,7 +430,13 @@ if sheets_client:
         id='check_transactions',
         replace_existing=True
     )
-    logger.info("🔍 بدأت مراقبة المعاملات الجديدة باستخدام APScheduler (كل 10 ثوانٍ)")
+    scheduler.add_job(
+        func=archive_completed_transactions,
+        trigger=IntervalTrigger(hours=1),
+        id='archive_job',
+        replace_existing=True
+    )
+    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 10 ثوانٍ) والأرشفة (كل ساعة)")
     atexit.register(lambda: scheduler.shutdown())
 
 # ------------------ نقاط نهاية API ------------------
@@ -383,12 +473,13 @@ def api_transaction(id):
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
+        # تحديث جميع الحقول المرسلة
         for key, value in updates.items():
             if key in headers:
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
 
-        # تحديث عمود V (آخر تعديل بواسطة) باسم الموظف المسؤول
+        # تحديث عمود V (آخر تعديل بواسطة)
         employee_name = updates.get('الموظف المسؤول', 'غير معروف')
         if 'آخر تعديل بواسطة' in headers:
             col_v = headers.index('آخر تعديل بواسطة') + 1
@@ -421,16 +512,31 @@ def api_transaction(id):
         try:
             history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
             if history_ws:
+                action = f"تم تحديث الحقول: {', '.join(updates.keys())}"
                 history_ws.append_row([
                     datetime.now().isoformat(),
                     id,
-                    f"تم تحديث الحقول: {', '.join(updates.keys())}",
+                    action,
                     employee_name
                 ])
         except Exception as e:
             logger.error(f"فشل تسجيل التاريخ: {e}")
 
-        # إرسال إشعار للمدير عبر البوت
+        # تسجيل خاص عند تغيير المؤسسة التالية
+        if 'المؤسسة التالية' in updates and updates['المؤسسة التالية']:
+            try:
+                history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+                if history_ws:
+                    history_ws.append_row([
+                        datetime.now().isoformat(),
+                        id,
+                        f"تم تعيين المؤسسة التالية إلى: {updates['المؤسسة التالية']}",
+                        employee_name
+                    ])
+            except Exception as e:
+                logger.error(f"فشل تسجيل تغيير المؤسسة: {e}")
+
+        # إرسال إشعار للمدير
         if Config.ADMIN_CHAT_ID and background_loop and bot_app:
             try:
                 asyncio.run_coroutine_threadsafe(
@@ -458,7 +564,7 @@ def api_transaction_history(id):
         if not ws:
             return jsonify([])
         records = ws.get_all_records()
-        history = [{'time': r.get('timestamp', ''), 'action': r.get('action', '')}
+        history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
                    for r in records if str(r.get('ID')) == id]
         history.sort(key=lambda x: x['time'], reverse=True)
         return jsonify(history)
@@ -466,7 +572,7 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحات HTML ------------------
+# ------------------ صفحات HTML (كما هي) ------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
@@ -648,6 +754,7 @@ EDIT_HTML = """
                                 <span class="timeline-dot"></span>
                                 <span class="text-sm text-gray-500">${item.time}</span>
                                 <p class="text-gray-800">${item.action}</p>
+                                <p class="text-xs text-gray-400">${item.user}</p>
                             </div>
                         `;
                     });
