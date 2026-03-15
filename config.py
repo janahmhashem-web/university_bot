@@ -13,7 +13,7 @@ class Config:
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 
     # Web App URL
-    WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://universitybot-production.up.railway.app')
+    WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
 
     # Email
     EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
