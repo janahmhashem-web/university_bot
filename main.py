@@ -140,9 +140,15 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("search", search))
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
-        logger.info("✅ تم تهيئة البوت وإضافة المعالجات")
+        logger.info("✅ تم بناء البوت وإضافة المعالجات")
+        
+        # تهيئة وتشغيل البوت (ضروري قبل استخدام process_update)
+        asyncio.run(bot_app.initialize())
+        asyncio.run(bot_app.start())
+        logger.info("✅ تم تهيئة البوت وتشغيله")
     except Exception as e:
         logger.error(f"❌ فشل تهيئة البوت: {e}")
+        bot_app = None
 
 # ---------- Webhook ----------
 @app.route('/webhook', methods=['POST'])
@@ -159,6 +165,7 @@ def webhook():
         return "Error", 500
 
 def set_webhook_sync():
+    """دالة متزامنة لتعيين webhook عبر asyncio.run"""
     if bot_app is None or not Config.WEB_APP_URL:
         logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
@@ -172,6 +179,7 @@ def set_webhook_sync():
     except Exception as e:
         logger.error(f"❌ فشل تعيين webhook: {e}")
 
+# تعيين webhook مع تأخير (مرة واحدة عند بدء التشغيل)
 if Config.WEB_APP_URL and bot_app:
     def delayed_webhook():
         time.sleep(5)
@@ -190,6 +198,7 @@ def check_new_transactions():
             return
         records = sheets_client.get_all_records(Config.SHEET_MANAGER)
         current_count = len(records)
+        logger.info(f"📊 عدد السجلات الحالي: {current_count}, آخر عدد معروف: {last_row_count}")
         if current_count > last_row_count:
             logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
             for i in range(last_row_count, current_count):
@@ -215,6 +224,7 @@ def check_new_transactions():
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
+# جدولة المهمة
 if sheets_client:
     try:
         last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
