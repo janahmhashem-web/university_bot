@@ -12,3 +12,4 @@ gunicorn==21.2.0
 setuptools==69.5.1
 wheel==0.43.0
 apscheduler==3.10.4
+requests==2.32.5

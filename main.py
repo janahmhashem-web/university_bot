@@ -4,14 +4,15 @@ import sys
 import os
 import json
 import asyncio
-import time
 import threading
+import time
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
+import requests  # لإرسال طلبات http متزامنة لتعيين webhook
 
 from sheets import GoogleSheetsClient
 from config import Config
@@ -129,8 +130,17 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(records)
     await update.message.reply_text(f"📊 *إحصائيات*\nإجمالي المعاملات: {total}", parse_mode='Markdown')
 
-# ---------- إعداد البوت ----------
+# ---------- إعداد البوت مع حلقة أحداث خلفية ----------
 bot_app = None
+loop = None
+thread = None
+
+def start_bot_loop():
+    global loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
 if Config.TELEGRAM_BOT_TOKEN:
     try:
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
@@ -142,8 +152,12 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("stats", stats))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
         
-        # تهيئة البوت فقط (دون start) - مناسب للـ webhook
-        asyncio.run(bot_app.initialize())
+        # بدء حلقة الأحداث في خيط منفصل
+        thread = threading.Thread(target=start_bot_loop, daemon=True)
+        thread.start()
+        # تهيئة البوت داخل الحلقة
+        future = asyncio.run_coroutine_threadsafe(bot_app.initialize(), loop)
+        future.result(timeout=10)
         logger.info("✅ تم تهيئة البوت")
     except Exception as e:
         logger.error(f"❌ فشل تهيئة البوت: {e}")
@@ -152,33 +166,41 @@ if Config.TELEGRAM_BOT_TOKEN:
 # ---------- Webhook ----------
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if bot_app is None:
+    if bot_app is None or loop is None:
         return "Bot not initialized", 500
     try:
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        asyncio.run(bot_app.process_update(update))
+        # إرسال المهمة إلى حلقة الأحداث الخلفية
+        asyncio.run_coroutine_threadsafe(bot_app.process_update(update), loop)
         return "OK"
     except Exception as e:
         logger.error(f"خطأ في webhook: {e}")
         return "Error", 500
 
 def set_webhook_sync():
-    """دالة متزامنة لتعيين webhook عبر asyncio.run"""
+    """تعيين webhook باستخدام requests (طريقة متزامنة موثوقة)"""
     if bot_app is None or not Config.WEB_APP_URL:
         logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
+    token = Config.TELEGRAM_BOT_TOKEN
     try:
-        async def _set():
-            await bot_app.bot.delete_webhook()
-            await bot_app.bot.set_webhook(url=webhook_url)
-        asyncio.run(_set())
-        logger.info(f"✅ Webhook set to {webhook_url}")
+        # حذف webhook القديم
+        requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
+        # تعيين webhook الجديد
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            data={"url": webhook_url}
+        )
+        if resp.status_code == 200 and resp.json().get("ok"):
+            logger.info(f"✅ Webhook set to {webhook_url}")
+        else:
+            logger.error(f"❌ فشل تعيين webhook: {resp.text}")
     except Exception as e:
-        logger.error(f"❌ فشل تعيين webhook: {e}")
+        logger.error(f"❌ خطأ في تعيين webhook: {e}")
 
-# تعيين webhook مع تأخير (مرة واحدة عند بدء التشغيل)
+# تعيين webhook مع تأخير
 if Config.WEB_APP_URL and bot_app:
     def delayed_webhook():
         time.sleep(5)
