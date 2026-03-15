@@ -23,42 +23,22 @@ class GoogleSheetsClient:
             creds = None
             logger.info("🔍 بدء محاولة الاتصال بـ Google Sheets")
 
-            # 1. محاولة قراءة المتغيرات المنفردة
-            private_key = os.getenv('GOOGLE_PRIVATE_KEY')
-            client_email = os.getenv('GOOGLE_CLIENT_EMAIL')
-            project_id = os.getenv('GOOGLE_PROJECT_ID')
-            private_key_id = os.getenv('GOOGLE_PRIVATE_KEY_ID')
-            client_id = os.getenv('GOOGLE_CLIENT_ID')
-            auth_uri = os.getenv('GOOGLE_AUTH_URI', 'https://accounts.google.com/o/oauth2/auth')
-            token_uri = os.getenv('GOOGLE_TOKEN_URI', 'https://oauth2.googleapis.com/token')
-            auth_provider_x509_cert_url = os.getenv('GOOGLE_AUTH_PROVIDER_CERT_URL', 'https://www.googleapis.com/oauth2/v1/certs')
-            client_x509_cert_url = os.getenv('GOOGLE_CLIENT_CERT_URL')
-            universe_domain = os.getenv('GOOGLE_UNIVERSE_DOMAIN', 'googleapis.com')
-
-            if private_key and client_email:
+            # 1. محاولة قراءة JSON مباشرة من المتغير (الأفضل)
+            creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+            if creds_json:
+                logger.info("📦 تم العثور على GOOGLE_CREDENTIALS_JSON")
                 try:
-                    info = {
-                        "type": "service_account",
-                        "project_id": project_id,
-                        "private_key_id": private_key_id,
-                        "private_key": private_key,
-                        "client_email": client_email,
-                        "client_id": client_id,
-                        "auth_uri": auth_uri,
-                        "token_uri": token_uri,
-                        "auth_provider_x509_cert_url": auth_provider_x509_cert_url,
-                        "client_x509_cert_url": client_x509_cert_url,
-                        "universe_domain": universe_domain
-                    }
+                    info = json.loads(creds_json)
                     creds = Credentials.from_service_account_info(info, scopes=self.scope)
-                    logger.info("✅ تم تحميل بيانات الاعتماد من المتغيرات المنفردة")
+                    logger.info("✅ تم تحميل بيانات الاعتماد من JSON مباشرة")
                 except Exception as e:
-                    logger.error(f"❌ فشل بناء الاعتماد من المتغيرات المنفردة: {e}")
+                    logger.error(f"❌ فشل تحليل JSON: {e}")
 
-            # 2. إذا فشلت، جرب Base64 (احتياطي)
+            # 2. إذا لم ينجح، جرب Base64
             if not creds:
                 creds_b64 = os.getenv('GOOGLE_CREDENTIALS_BASE64')
                 if creds_b64:
+                    logger.info("📦 تم العثور على GOOGLE_CREDENTIALS_BASE64")
                     try:
                         json_bytes = base64.b64decode(creds_b64)
                         info = json.loads(json_bytes)
@@ -67,10 +47,36 @@ class GoogleSheetsClient:
                     except Exception as e:
                         logger.error(f"❌ فشل فك base64: {e}")
 
-            # 3. كحل أخير، جرب الملف
+            # 3. جرب المتغيرات المنفردة (إذا كانت موجودة)
+            if not creds:
+                private_key = os.getenv('GOOGLE_PRIVATE_KEY')
+                client_email = os.getenv('GOOGLE_CLIENT_EMAIL')
+                if private_key and client_email:
+                    logger.info("📦 تم العثور على المتغيرات المنفردة")
+                    try:
+                        info = {
+                            "type": "service_account",
+                            "project_id": os.getenv('GOOGLE_PROJECT_ID'),
+                            "private_key_id": os.getenv('GOOGLE_PRIVATE_KEY_ID'),
+                            "private_key": private_key,
+                            "client_email": client_email,
+                            "client_id": os.getenv('GOOGLE_CLIENT_ID'),
+                            "auth_uri": os.getenv('GOOGLE_AUTH_URI', 'https://accounts.google.com/o/oauth2/auth'),
+                            "token_uri": os.getenv('GOOGLE_TOKEN_URI', 'https://oauth2.googleapis.com/token'),
+                            "auth_provider_x509_cert_url": os.getenv('GOOGLE_AUTH_PROVIDER_CERT_URL', 'https://www.googleapis.com/oauth2/v1/certs'),
+                            "client_x509_cert_url": os.getenv('GOOGLE_CLIENT_CERT_URL'),
+                            "universe_domain": os.getenv('GOOGLE_UNIVERSE_DOMAIN', 'googleapis.com')
+                        }
+                        creds = Credentials.from_service_account_info(info, scopes=self.scope)
+                        logger.info("✅ تم تحميل بيانات الاعتماد من المتغيرات المنفردة")
+                    except Exception as e:
+                        logger.error(f"❌ فشل بناء الاعتماد من المتغيرات المنفردة: {e}")
+
+            # 4. كحل أخير، جرب الملف
             if not creds:
                 file_path = '/volumes/credentials.json'
                 if os.path.exists(file_path):
+                    logger.info(f"📁 محاولة قراءة الملف: {file_path}")
                     try:
                         creds = Credentials.from_service_account_file(file_path, scopes=self.scope)
                         logger.info("✅ تم تحميل بيانات الاعتماد من الملف")
@@ -90,7 +96,8 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال: {e}")
             raise
 
-    # ========== دوال الوصول إلى الأوراق (كما هي سابقاً) ==========
+    # ======================= دوال الوصول إلى الأوراق =======================
+
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
