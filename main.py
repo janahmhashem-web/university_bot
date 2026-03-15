@@ -4,6 +4,9 @@ import sys
 import os
 import json
 import asyncio
+import time
+import threading
+from functools import wraps
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -150,7 +153,6 @@ def webhook():
     try:
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        # معالجة التحديث بشكل متزامن (مناسب لـ Flask)
         bot_app.process_update(update)
         return "OK"
     except Exception as e:
@@ -164,7 +166,6 @@ def set_webhook_sync():
         return
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
     try:
-        # استخدام asyncio.run لاستدعاء دوال async
         async def _set():
             await bot_app.bot.delete_webhook()
             await bot_app.bot.set_webhook(url=webhook_url)
@@ -172,16 +173,47 @@ def set_webhook_sync():
         logger.info(f"✅ Webhook set to {webhook_url}")
     except Exception as e:
         logger.error(f"❌ فشل تعيين webhook: {e}")
+        raise e  # نعيد رفع الخطأ لمعالجته في الديكوريتور
 
-# تعيين webhook عند بدء التشغيل
-if Config.WEB_APP_URL and bot_app:
+# ديكوريتور لإعادة المحاولة عند timeout
+def retry_on_timeout(max_retries=3, delay=2):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if "Timed out" in str(e) and attempt < max_retries - 1:
+                        logger.warning(f"⏱️ محاولة {attempt+1} فشلت بسبب timeout، إعادة المحاولة بعد {delay} ثوان...")
+                        time.sleep(delay)
+                    else:
+                        raise e
+            return None
+        return wrapper
+    return decorator
+
+@retry_on_timeout(max_retries=3, delay=2)
+def set_webhook_with_retry():
     set_webhook_sync()
+
+# تعيين webhook مع تأخير وإعادة محاولة
+if Config.WEB_APP_URL and bot_app:
+    def delayed_webhook():
+        time.sleep(5)  # انتظار 5 ثوانٍ لضمان جاهزية الخدمة
+        try:
+            set_webhook_with_retry()
+        except Exception as e:
+            logger.error(f"❌ فشل تعيين webhook بعد المحاولات: {e}")
+    
+    thread = threading.Thread(target=delayed_webhook)
+    thread.start()
+    logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
 # ---------- مراقبة المعاملات الجديدة باستخدام APScheduler ----------
 last_row_count = 0
 
 def check_new_transactions():
-    """دالة تنفذ كل 30 ثانية للتحقق من المعاملات الجديدة"""
     global last_row_count
     try:
         if not sheets_client:
