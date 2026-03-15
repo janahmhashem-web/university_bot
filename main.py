@@ -3,6 +3,7 @@ import logging
 import sys
 import os
 import json
+import asyncio
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -149,26 +150,32 @@ def webhook():
     try:
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
+        # معالجة التحديث بشكل متزامن (مناسب لـ Flask)
         bot_app.process_update(update)
         return "OK"
     except Exception as e:
         logger.error(f"خطأ في webhook: {e}")
         return "Error", 500
 
-def set_webhook():
+def set_webhook_sync():
+    """دالة متزامنة لتعيين webhook عبر asyncio.run"""
     if bot_app is None or not Config.WEB_APP_URL:
         logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
     try:
-        bot_app.bot.delete_webhook()
-        bot_app.bot.set_webhook(url=webhook_url)
+        # استخدام asyncio.run لاستدعاء دوال async
+        async def _set():
+            await bot_app.bot.delete_webhook()
+            await bot_app.bot.set_webhook(url=webhook_url)
+        asyncio.run(_set())
         logger.info(f"✅ Webhook set to {webhook_url}")
     except Exception as e:
         logger.error(f"❌ فشل تعيين webhook: {e}")
 
+# تعيين webhook عند بدء التشغيل
 if Config.WEB_APP_URL and bot_app:
-    set_webhook()
+    set_webhook_sync()
 
 # ---------- مراقبة المعاملات الجديدة باستخدام APScheduler ----------
 last_row_count = 0
