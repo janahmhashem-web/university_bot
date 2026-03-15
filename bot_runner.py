@@ -2,7 +2,6 @@
 import logging
 import sys
 from config import Config
-from telegram_bot import TransactionBot
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -13,12 +12,15 @@ logger = logging.getLogger(__name__)
 
 def main():
     try:
-        bot = TransactionBot(Config.TELEGRAM_BOT_TOKEN)
-        bot.sheets.ensure_sheets_exist()
-        logger.info("✅ البوت جاهز (Polling كل ثانية)")
-        bot.app.run_polling(poll_interval=1.0)
+        from telegram.ext import Application, CommandHandler
+        async def start(update, context):
+            await update.message.reply_text("مرحباً! البوت يعمل محلياً.")
+        app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        logger.info("✅ البوت المحلي يعمل (Polling)")
+        app.run_polling(poll_interval=1.0)
     except Exception as e:
-        logger.error(f"❌ فشل تشغيل البوت: {e}")
+        logger.error(f"❌ فشل تشغيل البوت المحلي: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":
