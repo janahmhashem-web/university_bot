@@ -12,7 +12,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
-import requests  # لإرسال طلبات http متزامنة لتعيين webhook
+import requests
 
 from sheets import GoogleSheetsClient
 from config import Config
@@ -130,17 +130,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(records)
     await update.message.reply_text(f"📊 *إحصائيات*\nإجمالي المعاملات: {total}", parse_mode='Markdown')
 
-# ---------- إعداد البوت مع حلقة أحداث خلفية ----------
+# ---------- إعداد البوت ----------
 bot_app = None
-loop = None
-thread = None
-
-def start_bot_loop():
-    global loop
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
 if Config.TELEGRAM_BOT_TOKEN:
     try:
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
@@ -151,13 +142,9 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
-        
-        # بدء حلقة الأحداث في خيط منفصل
-        thread = threading.Thread(target=start_bot_loop, daemon=True)
-        thread.start()
-        # تهيئة البوت داخل الحلقة
-        future = asyncio.run_coroutine_threadsafe(bot_app.initialize(), loop)
-        future.result(timeout=10)
+
+        # تهيئة البوت مرة واحدة (يتم إنشاء حلقة أحداث وتنفيذ initialize ثم إغلاقها)
+        asyncio.run(bot_app.initialize())
         logger.info("✅ تم تهيئة البوت")
     except Exception as e:
         logger.error(f"❌ فشل تهيئة البوت: {e}")
@@ -166,20 +153,20 @@ if Config.TELEGRAM_BOT_TOKEN:
 # ---------- Webhook ----------
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if bot_app is None or loop is None:
+    if bot_app is None:
         return "Bot not initialized", 500
     try:
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        # إرسال المهمة إلى حلقة الأحداث الخلفية
-        asyncio.run_coroutine_threadsafe(bot_app.process_update(update), loop)
+        # استخدام asyncio.run لمعالجة التحديث (يخلق حلقة جديدة لكل طلب)
+        asyncio.run(bot_app.process_update(update))
         return "OK"
     except Exception as e:
         logger.error(f"خطأ في webhook: {e}")
         return "Error", 500
 
 def set_webhook_sync():
-    """تعيين webhook باستخدام requests (طريقة متزامنة موثوقة)"""
+    """تعيين webhook باستخدام requests (متزامن)"""
     if bot_app is None or not Config.WEB_APP_URL:
         logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
@@ -264,7 +251,7 @@ if sheets_client:
     logger.info("🔍 بدأت مراقبة المعاملات الجديدة باستخدام APScheduler")
     atexit.register(lambda: scheduler.shutdown())
 
-# ---------- صفحات HTML مبسطة ----------
+# ---------- صفحات HTML (مختصرة للعرض) ----------
 INDEX_HTML = """
 <!DOCTYPE html>
 <html dir="rtl">
@@ -294,10 +281,8 @@ EDIT_HTML = """
 <h1>تعديل المعاملة <span id="tid"></span></h1>
 <div id="form"></div>
 <script>
-const urlParams = new URLSearchParams(window.location.search);
 const id = window.location.pathname.split('/').pop();
 document.getElementById('tid').innerText = id;
-
 fetch(`/api/transaction/${id}`).then(r=>r.json()).then(data => {
     let form = '<form id="editForm">';
     for (let key in data) {
@@ -305,7 +290,6 @@ fetch(`/api/transaction/${id}`).then(r=>r.json()).then(data => {
     }
     form += '<button type="submit">حفظ</button></form>';
     document.getElementById('form').innerHTML = form;
-
     document.getElementById('editForm').onsubmit = async (e) => {
         e.preventDefault();
         const formData = new FormData(e.target);
