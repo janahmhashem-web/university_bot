@@ -19,6 +19,7 @@ from sheets import GoogleSheetsClient
 from config import Config
 from email_service import EmailService
 from qr_generator import QRGenerator
+from ai_handler import AIAssistant
 from datetime import datetime
 
 # ------------------ إعداد التسجيل ------------------
@@ -39,8 +40,10 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# ------------------ دوال البوت الذكية ------------------
-# (كما هي سابقاً – لم تتغير)
+# ------------------ الذكاء الاصطناعي ------------------
+ai_assistant = AIAssistant()
+
+# ------------------ دوال البوت الأساسية ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -139,32 +142,15 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    logger.info(f"🧠 معالجة رسالة عادية: {text}")
-    if text.isdigit():
-        context.args = [text]
-        await get_id(update, context)
-        return
-    if text.startswith(('بحث', 'ابحث')):
-        keyword = text.replace('بحث', '').replace('ابحث', '').strip()
-        if keyword:
-            context.args = [keyword]
-            await search(update, context)
-            return
-    if text.startswith(('تاريخ', 'تتبع')):
-        parts = text.split()
-        if len(parts) > 1 and parts[1].isdigit():
-            context.args = [parts[1]]
-            await get_history(update, context)
-            return
-    await update.message.reply_text(
-        "🤖 لم أفهم طلبك. يمكنك استخدام:\n"
-        "/id [رقم] - تفاصيل معاملة\n"
-        "/history [رقم] - سجل التتبع\n"
-        "/search [كلمة] - بحث\n"
-        "أو فقط أرسل رقم المعاملة مباشرة."
-    )
+# ------------------ معالج الذكاء الاصطناعي ------------------
+async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or ""
+    logger.info(f"🤖 استعلام ذكي من {user_name}: {user_message[:50]}...")
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    response = await ai_assistant.get_response(user_message, user_id, user_name)
+    await update.message.reply_text(response)
 
 # ------------------ إعداد البوت وحلقة الأحداث الخلفية ------------------
 bot_app = None
@@ -180,8 +166,9 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("search", search))
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
-        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
-        logger.info("✅ تم بناء البوت وإضافة المعالجات")
+        # معالج الذكاء الاصطناعي للرسائل النصية العادية
+        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat_handler))
+        logger.info("✅ تم بناء البوت وإضافة المعالجات (بما في ذلك الذكاء الاصطناعي)")
 
         async def init_bot():
             await bot_app.initialize()
@@ -299,15 +286,14 @@ def check_new_transactions():
                         if qr_ws:
                             name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                             email = new_row.get('البريد الإلكتروني', '')
-                            # رابط صورة QR (يمكن استخدام QRGenerator.get_qr_url)
                             qr_image_url = QRGenerator.get_qr_url(transaction_link)
                             qr_ws.append_row([
-                                name,                 # العمود A
-                                email,                # العمود B
-                                transaction_id,       # العمود C
-                                transaction_link,     # العمود D (رابط المعاملة)
-                                qr_image_url,         # العمود E (رابط صورة QR)
-                                transaction_link      # العمود F (رابط المعاملة – يمكن تغييره لرابط الصورة الكبيرة)
+                                name,
+                                email,
+                                transaction_id,
+                                transaction_link,
+                                qr_image_url,
+                                transaction_link
                             ])
                             logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
@@ -315,7 +301,6 @@ def check_new_transactions():
                         logger.error(f"❌ فشل كتابة البيانات للصف {row_number}: {e}")
                         continue
 
-                # إرسال الإيميل (باستخدام الرابط الصحيح)
                 customer_email = new_row.get('البريد الإلكتروني')
                 customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
                 if transaction_id and customer_email:
@@ -330,7 +315,6 @@ def check_new_transactions():
                         )
                         logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
 
-                        # تسجيل حدث الإنشاء في TransactionHistory
                         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
                         if history_ws:
                             history_ws.append_row([
@@ -343,7 +327,6 @@ def check_new_transactions():
                         logger.error(f"❌ فشل إرسال إيميل للمعاملة {transaction_id}: {e}")
                 else:
                     logger.warning(f"⚠️ بيانات ناقصة للمعاملة: ID={transaction_id}, email={customer_email}, name={customer_name}")
-
             last_row_count = current_count
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
@@ -359,7 +342,7 @@ if sheets_client:
     scheduler.start()
     scheduler.add_job(
         func=check_new_transactions,
-        trigger=IntervalTrigger(seconds=10),  # كل 10 ثوانٍ لتسريع التوليد
+        trigger=IntervalTrigger(seconds=10),
         id='check_transactions',
         replace_existing=True
     )
@@ -400,22 +383,20 @@ def api_transaction(id):
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        # تحديث جميع الحقول المرسلة من الواجهة
         for key, value in updates.items():
             if key in headers:
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
 
-        # تحديث عمود V (آخر تعديل بواسطة) – نستخدم قيمة حقل "الموظف المسؤول" من الطلب
+        # تحديث عمود V (آخر تعديل بواسطة) باسم الموظف المسؤول
         employee_name = updates.get('الموظف المسؤول', 'غير معروف')
         if 'آخر تعديل بواسطة' in headers:
             col_v = headers.index('آخر تعديل بواسطة') + 1
             ws.update_cell(row, col_v, employee_name)
         else:
-            # إذا لم يكن العمود موجوداً، نكتب في العمود 22 (V)
             ws.update_cell(row, 22, employee_name)
 
-        # تحديث عمود W (آخر تعديل بتاريخ) بالوقت الحالي
+        # تحديث عمود W (آخر تعديل بتاريخ)
         now = datetime.now().isoformat()
         if 'آخر تعديل بتاريخ' in headers:
             col_w = headers.index('آخر تعديل بتاريخ') + 1
@@ -423,7 +404,7 @@ def api_transaction(id):
         else:
             ws.update_cell(row, 23, now)
 
-        # تحديث عمود X (عدد التعديلات) – زيادة بمقدار 1
+        # تحديث عمود X (عدد التعديلات)
         try:
             current_count_cell = ws.cell(row, 24).value
             current_count = int(current_count_cell) if current_count_cell and str(current_count_cell).isdigit() else 0
@@ -485,7 +466,7 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحات HTML (كما هي سابقاً) ------------------
+# ------------------ صفحات HTML ------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>

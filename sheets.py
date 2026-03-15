@@ -15,7 +15,7 @@ class GoogleSheetsClient:
         try:
             creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
             if not creds_json:
-                raise Exception("❌ GOOGLE_CREDENTIALS_JSON غير موجود في المتغيرات البيئية")
+                raise Exception("❌ GOOGLE_CREDENTIALS_JSON غير موجود")
             creds_dict = json.loads(creds_json)
             credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
             self.client = gspread.authorize(credentials)
@@ -34,17 +34,13 @@ class GoogleSheetsClient:
             print(f"⚠️ خطأ في الحصول على الورقة {sheet_name}: {e}")
             return None
 
-    def ensure_sheets_exist(self):
-        pass
-
-    # دوال القراءة
     def get_all_records(self, sheet_name):
         ws = self.get_worksheet(sheet_name)
         if ws:
             try:
                 return ws.get_all_records()
             except Exception as e:
-                print(f"⚠️ خطأ في جلب السجلات من {sheet_name}: {e}")
+                print(f"⚠️ خطأ في جلب السجلات: {e}")
                 return []
         return []
 
@@ -62,16 +58,6 @@ class GoogleSheetsClient:
             print(f"⚠️ خطأ في البحث عن ID {transaction_id}: {e}")
         return None
 
-    def get_headers(self, sheet_name):
-        ws = self.get_worksheet(sheet_name)
-        if ws:
-            try:
-                return ws.row_values(1)
-            except Exception as e:
-                print(f"⚠️ خطأ في جلب العناوين: {e}")
-        return []
-
-    # دوال الكتابة
     def update_cell(self, sheet_name, row, col, value):
         ws = self.get_worksheet(sheet_name)
         if ws:
@@ -80,20 +66,6 @@ class GoogleSheetsClient:
                 return True
             except Exception as e:
                 print(f"⚠️ خطأ في تحديث الخلية: {e}")
-        return False
-
-    def update_row(self, sheet_name, row, data_dict):
-        ws = self.get_worksheet(sheet_name)
-        if not ws:
-            return False
-        try:
-            headers = ws.row_values(1)
-            row_values = [data_dict.get(h, '') for h in headers]
-            cell_range = f'A{row}:{chr(64 + len(headers))}{row}'
-            ws.update(cell_range, [row_values])
-            return True
-        except Exception as e:
-            print(f"⚠️ خطأ في تحديث الصف {row}: {e}")
         return False
 
     def append_row(self, sheet_name, values):
@@ -105,12 +77,3 @@ class GoogleSheetsClient:
             except Exception as e:
                 print(f"⚠️ خطأ في إضافة صف: {e}")
         return False
-
-    def find_cell(self, sheet_name, value):
-        ws = self.get_worksheet(sheet_name)
-        if ws:
-            try:
-                return ws.find(value)
-            except Exception as e:
-                print(f"⚠️ خطأ في البحث عن '{value}': {e}")
-        return None

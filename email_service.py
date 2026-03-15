@@ -16,7 +16,7 @@ class EmailService:
             msg['To'] = customer_email
 
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
-            transaction_link = f"{Config.WEB_APP_URL}?id={transaction_id}"
+            transaction_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
 
             html = f"""
             <div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
