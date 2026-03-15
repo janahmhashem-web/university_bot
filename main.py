@@ -6,9 +6,10 @@ import json
 import asyncio
 import threading
 import time
+import traceback
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
@@ -38,8 +39,9 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# ---------- دوال البوت ----------
+# ---------- دوال البوت الكاملة ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📨 أمر /start من المستخدم {update.effective_user.id}")
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
@@ -52,8 +54,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "\n👑 *أوامر المدير:*\n"
         msg += "🔹 /stats - إحصائيات\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
+    logger.info("✅ تم الرد على /start")
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📨 أمر /id من المستخدم {update.effective_user.id}")
     if not sheets_client:
         await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات حالياً.")
         return
@@ -72,6 +76,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("الرجاء إدخال رقم المعاملة: /id 123")
 
 async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📨 أمر /history من المستخدم {update.effective_user.id}")
     if not sheets_client:
         await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
@@ -98,6 +103,7 @@ async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("الرجاء إدخال رقم المعاملة: /history 123")
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📨 أمر /search من المستخدم {update.effective_user.id}")
     if not sheets_client:
         await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
@@ -116,9 +122,11 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("الرجاء إدخال كلمة للبحث: /search كلمة")
 
 async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📨 أمر /wake من المستخدم {update.effective_user.id}")
     await update.message.reply_text("✅ البوت نشط وجاهز!")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📨 أمر /stats من المستخدم {update.effective_user.id}")
     user_id = update.effective_user.id
     if user_id != Config.ADMIN_CHAT_ID:
         await update.message.reply_text("⛔ هذا الأمر متاح فقط للمدير.")
@@ -130,20 +138,28 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total = len(records)
     await update.message.reply_text(f"📊 *إحصائيات*\nإجمالي المعاملات: {total}", parse_mode='Markdown')
 
+# دالة تشخيصية تستجيب لأي رسالة نصية
+async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"📨 رسالة نصية: {update.message.text}")
+    await update.message.reply_text(f"استقبلت: {update.message.text}")
+
 # ---------- إعداد البوت ----------
 bot_app = None
 if Config.TELEGRAM_BOT_TOKEN:
     try:
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+        # إضافة جميع المعالجات
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
         bot_app.add_handler(CommandHandler("search", search))
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
-        logger.info("✅ تم بناء البوت وإضافة المعالجات")
+        # معالج لأي رسالة نصية (للتأكد من وصول التحديثات)
+        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo))
+        logger.info("✅ تم بناء البوت وإضافة جميع المعالجات")
 
-        # تهيئة البوت (يجب أن تعمل مرة واحدة)
+        # تهيئة البوت مرة واحدة (لا نستخدم start() لأنه يبدأ polling)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(bot_app.initialize())
@@ -156,23 +172,32 @@ if Config.TELEGRAM_BOT_TOKEN:
 # ---------- Webhook ----------
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    logger.info("📩 تم استقبال طلب webhook")
     if bot_app is None:
+        logger.error("bot_app is None")
         return "Bot not initialized", 500
     try:
+        # قراءة البيانات
         json_str = request.get_data(as_text=True)
+        logger.debug(f"البيانات: {json_str[:200]}...")
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        # إنشاء حلقة أحداث جديدة لكل طلب
+        # إنشاء حلقة أحداث جديدة لمعالجة التحديث (آمن للاستخدام في خيوط Flask)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(bot_app.process_update(update))
-        loop.close()
+        try:
+            loop.run_until_complete(bot_app.process_update(update))
+            logger.info("✅ تمت معالجة التحديث بنجاح")
+        except Exception as e:
+            logger.error(f"❌ خطأ أثناء معالجة التحديث: {e}\n{traceback.format_exc()}")
+        finally:
+            loop.close()
         return "OK"
     except Exception as e:
-        logger.error(f"خطأ في webhook: {e}")
+        logger.error(f"❌ خطأ في webhook: {e}\n{traceback.format_exc()}")
         return "Error", 500
 
+# تعيين webhook باستخدام requests (متزامن)
 def set_webhook_sync():
-    """تعيين webhook باستخدام requests (متزامن) مع تسجيل النتيجة"""
     if bot_app is None or not Config.WEB_APP_URL:
         logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
@@ -198,7 +223,7 @@ def set_webhook_sync():
     except Exception as e:
         logger.error(f"❌ خطأ في تعيين webhook: {e}")
 
-# تعيين webhook مع تأخير (مرة واحدة)
+# تأخير تعيين webhook لضمان جاهزية الخدمة
 if Config.WEB_APP_URL and bot_app:
     def delayed_webhook():
         time.sleep(5)
@@ -261,8 +286,62 @@ if sheets_client:
     logger.info("🔍 بدأت مراقبة المعاملات الجديدة باستخدام APScheduler")
     atexit.register(lambda: scheduler.shutdown())
 
-# ---------- صفحات HTML (كما هي) ----------
-# (نفس الكود السابق، اختصاراً لم نكرره هنا لكنه موجود في الردود السابقة)
+# ---------- صفحات HTML (مبسطة) ----------
+INDEX_HTML = """
+<!DOCTYPE html>
+<html dir="rtl">
+<head><meta charset="UTF-8"><title>المعاملات</title></head>
+<body>
+<h1>قائمة المعاملات</h1>
+<div id="transactions"></div>
+<script>
+fetch('/api/transactions').then(r=>r.json()).then(data => {
+    let html = '<table border="1"><tr><th>ID</th><th>الاسم</th><th>الحالة</th><th>الموظف</th></tr>';
+    data.forEach(t => {
+        html += `<tr><td>${t.id}</td><td>${t.name}</td><td>${t.status}</td><td>${t.employee}</td></tr>`;
+    });
+    html += '</table>';
+    document.getElementById('transactions').innerHTML = html;
+});
+</script>
+</body>
+</html>
+"""
+
+EDIT_HTML = """
+<!DOCTYPE html>
+<html dir="rtl">
+<head><meta charset="UTF-8"><title>تعديل معاملة</title></head>
+<body>
+<h1>تعديل المعاملة <span id="tid"></span></h1>
+<div id="form"></div>
+<script>
+const id = window.location.pathname.split('/').pop();
+document.getElementById('tid').innerText = id;
+fetch(`/api/transaction/${id}`).then(r=>r.json()).then(data => {
+    let form = '<form id="editForm">';
+    for (let key in data) {
+        form += `<label>${key}: <input name="${key}" value="${data[key]}"></label><br>`;
+    }
+    form += '<button type="submit">حفظ</button></form>';
+    document.getElementById('form').innerHTML = form;
+    document.getElementById('editForm').onsubmit = async (e) => {
+        e.preventDefault();
+        const formData = new FormData(e.target);
+        const updates = Object.fromEntries(formData.entries());
+        const res = await fetch(`/api/transaction/${id}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(updates)
+        });
+        const result = await res.json();
+        alert(result.message);
+    };
+});
+</script>
+</body>
+</html>
+"""
 
 @app.route('/')
 def index():
