@@ -6,6 +6,7 @@ import json
 import asyncio
 import threading
 import time
+import random
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -65,11 +66,11 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
         if row_info:
             data = row_info['data']
-            # بناء رسالة منظمة
             msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
             for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
                 if key in data:
                     msg += f"• {key}: {data[key]}\n"
+            # الرابط الصحيح للمعاملة
             msg += f"\n🔗 [رابط المتابعة]({Config.WEB_APP_URL}/transaction/{transaction_id})"
             await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
         else:
@@ -93,7 +94,7 @@ async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             history = [r for r in records if str(r.get('ID')) == transaction_id]
             if history:
                 msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n"
-                for entry in history[-5:]:  # آخر 5 حركات
+                for entry in history[-5:]:
                     time_str = entry.get('timestamp', '')
                     action = entry.get('action', '')
                     msg += f"• {time_str}: {action}\n"
@@ -139,29 +140,21 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
     total = len(records)
-    # إحصائيات إضافية حسب الحالة
     completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
     pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
-    msg = f"📊 *إحصائيات*\n"
-    msg += f"إجمالي المعاملات: {total}\n"
-    msg += f"مكتملة: {completed}\n"
-    msg += f"قيد المعالجة: {pending}"
+    msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
-# ------------------ معالج ذكي للرسائل النصية ------------------
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """يحاول فهم الرسائل العادية وتحويلها إلى أوامر"""
     text = update.message.text.strip()
     logger.info(f"🧠 معالجة رسالة عادية: {text}")
 
-    # إذا كان النص مجرد رقم (مثل 12345) – نعتبره /id
     if text.isdigit():
-        # استدعاء أمر /id بشكل غير مباشر
         context.args = [text]
         await get_id(update, context)
         return
 
-    # إذا بدأ بكلمة "بحث" أو "ابحث" – نعتبره /search
     if text.startswith(('بحث', 'ابحث')):
         keyword = text.replace('بحث', '').replace('ابحث', '').strip()
         if keyword:
@@ -169,7 +162,6 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await search(update, context)
             return
 
-    # إذا بدأ بكلمة "تاريخ" أو "تتبع" – نعتبره /history
     if text.startswith(('تاريخ', 'تتبع')):
         parts = text.split()
         if len(parts) > 1 and parts[1].isdigit():
@@ -177,7 +169,6 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await get_history(update, context)
             return
 
-    # إذا لم نفهم، نعرض تعليمات سريعة
     await update.message.reply_text(
         "🤖 لم أفهم طلبك. يمكنك استخدام:\n"
         "/id [رقم] - تفاصيل معاملة\n"
@@ -194,26 +185,19 @@ loop_thread = None
 if Config.TELEGRAM_BOT_TOKEN:
     try:
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-
-        # إضافة معالجات الأوامر
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
         bot_app.add_handler(CommandHandler("search", search))
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
-
-        # معالج ذكي لأي رسالة نصية ليست أمراً
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
+        logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
-        logger.info("✅ تم بناء البوت وإضافة المعالجات (بما في ذلك الذكي)")
-
-        # دالة لتهيئة البوت في حلقة خلفية
         async def init_bot():
             await bot_app.initialize()
             logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
 
-        # بدء حلقة خلفية وتشغيل initialize فيها
         def start_background_loop():
             global background_loop
             background_loop = asyncio.new_event_loop()
@@ -274,7 +258,7 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة (APScheduler) ------------------
+# ------------------ مراقبة المعاملات الجديدة مع توليد ID تلقائي ------------------
 last_row_count = 0
 
 def check_new_transactions():
@@ -283,19 +267,41 @@ def check_new_transactions():
         if not sheets_client:
             logger.warning("⏳ sheets_client غير متصل، تخطي الدورة")
             return
-        records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+
+        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+        if not ws:
+            logger.error("❌ لا يمكن الوصول إلى ورقة manager")
+            return
+
+        records = ws.get_all_records()
         current_count = len(records)
         logger.info(f"📊 عدد السجلات الحالي: {current_count}, آخر عدد معروف: {last_row_count}")
+
         if current_count > last_row_count:
             logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
             for i in range(last_row_count, current_count):
+                row_number = i + 2
                 new_row = records[i]
                 transaction_id = new_row.get('ID')
+                if not transaction_id:
+                    now = datetime.now()
+                    date_str = now.strftime("%Y%m%d%H%M%S")
+                    random_part = random.randint(1000, 9999)
+                    transaction_id = f"MUT-{date_str}-{random_part}"
+                    try:
+                        ws.update_cell(row_number, 8, transaction_id)  # العمود H هو الثامن
+                        logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
+                    except Exception as e:
+                        logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
+                        continue
+
                 customer_email = new_row.get('البريد الإلكتروني')
                 customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
                 if transaction_id and customer_email:
                     try:
-                        qr_url = QRGenerator.get_qr_url(f"{Config.WEB_APP_URL}?id={transaction_id}")
+                        # الرابط الصحيح لصفحة المعاملة
+                        transaction_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
+                        qr_url = QRGenerator.get_qr_url(transaction_link)
                         EmailService.send_customer_email(
                             customer_email,
                             customer_name,
@@ -303,7 +309,7 @@ def check_new_transactions():
                             qr_url
                         )
                         logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
-                        # تسجيل حدث الإنشاء في TransactionHistory
+
                         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
                         if history_ws:
                             history_ws.append_row([
@@ -339,21 +345,17 @@ if sheets_client:
     atexit.register(lambda: scheduler.shutdown())
 
 # ------------------ نقاط نهاية API ------------------
-
 @app.route('/api/transactions', methods=['GET'])
 def api_transactions():
-    """قائمة مختصرة للمعاملات (للوحة التحكم)"""
     if not sheets_client:
         return jsonify([])
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
-    result = []
-    for r in records:
-        result.append({
-            'id': r.get('ID', ''),
-            'name': r.get('اسم صاحب المعاملة الثلاثي', ''),
-            'status': r.get('الحالة', ''),
-            'employee': r.get('الموظف المسؤول', '')
-        })
+    result = [{
+        'id': r.get('ID', ''),
+        'name': r.get('اسم صاحب المعاملة الثلاثي', ''),
+        'status': r.get('الحالة', ''),
+        'employee': r.get('الموظف المسؤول', '')
+    } for r in records]
     return jsonify(result)
 
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
@@ -361,14 +363,12 @@ def api_transaction(id):
     if not sheets_client:
         return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
 
-    # GET: جلب بيانات المعاملة
     if request.method == 'GET':
         data = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
         if not data:
             return jsonify({'error': 'Not found'}), 404
         return jsonify(data['data'])
 
-    # POST: تحديث المعاملة
     else:
         updates = request.json
         row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
@@ -378,13 +378,11 @@ def api_transaction(id):
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        # تطبيق التحديثات
         for key, value in updates.items():
             if key in headers:
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
 
-        # تحديث حقل "آخر تعديل بتاريخ"
         if 'آخر تعديل بتاريخ' in headers:
             col = headers.index('آخر تعديل بتاريخ') + 1
             ws.update_cell(row, col, datetime.now().isoformat())
@@ -409,7 +407,7 @@ def api_transaction(id):
                     bot_app.bot.send_message(
                         chat_id=Config.ADMIN_CHAT_ID,
                         text=f"✏️ *تحديث معاملة*\n"
-                             f"المعامدة: {id}\n"
+                             f"المعاملة: {id}\n"
                              f"تم تعديل الحقول: {', '.join(updates.keys())}\n"
                              f"بواسطة: {updates.get('الموظف المسؤول', 'غير معروف')}",
                         parse_mode='Markdown'
@@ -423,7 +421,6 @@ def api_transaction(id):
 
 @app.route('/api/history/<id>')
 def api_transaction_history(id):
-    """جلب سجل تتبع معاملة محددة"""
     if not sheets_client:
         return jsonify([])
     try:
@@ -431,12 +428,8 @@ def api_transaction_history(id):
         if not ws:
             return jsonify([])
         records = ws.get_all_records()
-        # فلتر حسب ID (نتوقع وجود عمود ID في ورقة التاريخ)
-        history = [
-            {'time': r.get('timestamp', ''), 'action': r.get('action', '')}
-            for r in records if str(r.get('ID')) == id
-        ]
-        # ترتيب تنازلي (الأحدث أولاً)
+        history = [{'time': r.get('timestamp', ''), 'action': r.get('action', '')}
+                   for r in records if str(r.get('ID')) == id]
         history.sort(key=lambda x: x['time'], reverse=True)
         return jsonify(history)
     except Exception as e:
@@ -509,19 +502,16 @@ EDIT_HTML = """
 </head>
 <body class="bg-gray-100 p-4">
     <div class="max-w-3xl mx-auto">
-        <!-- عنوان الصفحة -->
         <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
             <h1 class="text-xl font-semibold text-gray-800">🔍 تتبع المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
             <a href="/" class="text-blue-500 text-sm">← العودة</a>
         </div>
 
-        <!-- قسم القراءة فقط (بيانات أساسية) -->
         <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
             <h2 class="text-lg font-semibold text-gray-700 mb-3">📋 معلومات أساسية</h2>
             <div id="readonly-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
         </div>
 
-        <!-- قسم التعديل (الحقول القابلة للتعديل) -->
         <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
             <h2 class="text-lg font-semibold text-gray-700 mb-3">✏️ تحديث البيانات</h2>
             <form id="editForm" class="space-y-4">
@@ -530,13 +520,11 @@ EDIT_HTML = """
             </form>
         </div>
 
-        <!-- سجل التتبع (Timeline) -->
         <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
             <h2 class="text-lg font-semibold text-gray-700 mb-3">📜 سجل الحركات</h2>
             <div id="history-timeline" class="space-y-2"></div>
         </div>
 
-        <!-- رسالة نجاح/خطأ -->
         <div id="message" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg opacity-0 transition-opacity duration-300"></div>
     </div>
 
@@ -554,11 +542,9 @@ EDIT_HTML = """
             setTimeout(() => msgDiv.classList.remove('opacity-100'), 3000);
         }
 
-        // تحميل بيانات المعاملة
         fetch(`/api/transaction/${id}`)
             .then(res => res.ok ? res.json() : Promise.reject('فشل التحميل'))
             .then(data => {
-                // الحقول للقراءة فقط (B:G)
                 const readonlyKeys = [
                     'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
                     'القسم', 'نوع المعاملة', 'المرافقات'
@@ -581,7 +567,6 @@ EDIT_HTML = """
                     }
                 });
 
-                // الحقول القابلة للتعديل (جميع المفاتيح ما عدا القراءة فقط و ID و LOG_JSON)
                 const editableKeys = Object.keys(data).filter(k => !readonlyKeys.includes(k) && k !== 'ID' && k !== 'LOG_JSON');
                 const editableContainer = document.getElementById('editable-fields');
                 editableContainer.innerHTML = '';
@@ -598,7 +583,6 @@ EDIT_HTML = """
                 document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة</div>';
             });
 
-        // حفظ التغييرات
         document.getElementById('editForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
@@ -618,7 +602,6 @@ EDIT_HTML = """
             }
         });
 
-        // تحميل سجل التتبع
         function loadHistory() {
             fetch(`/api/history/${id}`)
                 .then(res => res.json())
