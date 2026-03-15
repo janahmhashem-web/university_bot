@@ -8,7 +8,7 @@ import threading
 import time
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
@@ -20,7 +20,7 @@ from email_service import EmailService
 from qr_generator import QRGenerator
 from datetime import datetime
 
-# إعداد التسجيل
+# ------------------ إعداد التسجيل ------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# تهيئة Google Sheets Client
+# ------------------ Google Sheets ------------------
 try:
     sheets_client = GoogleSheetsClient()
     logger.info("✅ تم الاتصال بـ Google Sheets")
@@ -38,22 +38,25 @@ except Exception as e:
 
 app = Flask(__name__)
 
-# ---------- دوال البوت ----------
+# ------------------ دوال البوت الذكية ------------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """رسالة الترحيب مع عرض الأوامر"""
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
     msg += "📌 *الأوامر العامة:*\n"
     msg += "🔹 /id [رقم] - تفاصيل معاملة\n"
-    msg += "🔹 /history [رقم] - سجل التتبع\n"
-    msg += "🔹 /search [كلمة] - بحث\n"
-    msg += "🔹 /wake - تحديث فوري\n"
+    msg += "🔹 /history [رقم] - سجل تتبع معاملة\n"
+    msg += "🔹 /search [كلمة] - بحث في المعاملات\n"
+    msg += "🔹 /wake - للتأكد من أن البوت يعمل\n"
     if is_admin:
         msg += "\n👑 *أوامر المدير:*\n"
-        msg += "🔹 /stats - إحصائيات\n"
+        msg += "🔹 /stats - إحصائيات عامة\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض تفاصيل معاملة محددة"""
     if not sheets_client:
         await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات حالياً.")
         return
@@ -62,16 +65,20 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
         if row_info:
             data = row_info['data']
+            # بناء رسالة منظمة
             msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
-            for key, value in data.items():
-                msg += f"• {key}: {value}\n"
-            await update.message.reply_text(msg, parse_mode='Markdown')
+            for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
+                if key in data:
+                    msg += f"• {key}: {data[key]}\n"
+            msg += f"\n🔗 [رابط المتابعة]({Config.WEB_APP_URL}/transaction/{transaction_id})"
+            await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
         else:
             await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
     else:
         await update.message.reply_text("الرجاء إدخال رقم المعاملة: /id 123")
 
 async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض سجل تتبع معاملة"""
     if not sheets_client:
         await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
@@ -86,8 +93,10 @@ async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
             history = [r for r in records if str(r.get('ID')) == transaction_id]
             if history:
                 msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n"
-                for entry in history:
-                    msg += f"• {entry.get('تاريخ', '')}: {entry.get('حالة', '')}\n"
+                for entry in history[-5:]:  # آخر 5 حركات
+                    time_str = entry.get('timestamp', '')
+                    action = entry.get('action', '')
+                    msg += f"• {time_str}: {action}\n"
                 await update.message.reply_text(msg, parse_mode='Markdown')
             else:
                 await update.message.reply_text(f"لا يوجد سجل للمعاملة {transaction_id}")
@@ -98,6 +107,7 @@ async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("الرجاء إدخال رقم المعاملة: /history 123")
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بحث بسيط عن كلمة في المعاملات"""
     if not sheets_client:
         await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
@@ -119,6 +129,7 @@ async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ البوت نشط وجاهز!")
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """إحصائيات للمدير"""
     user_id = update.effective_user.id
     if user_id != Config.ADMIN_CHAT_ID:
         await update.message.reply_text("⛔ هذا الأمر متاح فقط للمدير.")
@@ -128,9 +139,54 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
     total = len(records)
-    await update.message.reply_text(f"📊 *إحصائيات*\nإجمالي المعاملات: {total}", parse_mode='Markdown')
+    # إحصائيات إضافية حسب الحالة
+    completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
+    pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
+    msg = f"📊 *إحصائيات*\n"
+    msg += f"إجمالي المعاملات: {total}\n"
+    msg += f"مكتملة: {completed}\n"
+    msg += f"قيد المعالجة: {pending}"
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
-# ---------- إعداد البوت وحلقة الأحداث الخلفية ----------
+# ------------------ معالج ذكي للرسائل النصية ------------------
+async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """يحاول فهم الرسائل العادية وتحويلها إلى أوامر"""
+    text = update.message.text.strip()
+    logger.info(f"🧠 معالجة رسالة عادية: {text}")
+
+    # إذا كان النص مجرد رقم (مثل 12345) – نعتبره /id
+    if text.isdigit():
+        # استدعاء أمر /id بشكل غير مباشر
+        context.args = [text]
+        await get_id(update, context)
+        return
+
+    # إذا بدأ بكلمة "بحث" أو "ابحث" – نعتبره /search
+    if text.startswith(('بحث', 'ابحث')):
+        keyword = text.replace('بحث', '').replace('ابحث', '').strip()
+        if keyword:
+            context.args = [keyword]
+            await search(update, context)
+            return
+
+    # إذا بدأ بكلمة "تاريخ" أو "تتبع" – نعتبره /history
+    if text.startswith(('تاريخ', 'تتبع')):
+        parts = text.split()
+        if len(parts) > 1 and parts[1].isdigit():
+            context.args = [parts[1]]
+            await get_history(update, context)
+            return
+
+    # إذا لم نفهم، نعرض تعليمات سريعة
+    await update.message.reply_text(
+        "🤖 لم أفهم طلبك. يمكنك استخدام:\n"
+        "/id [رقم] - تفاصيل معاملة\n"
+        "/history [رقم] - سجل التتبع\n"
+        "/search [كلمة] - بحث\n"
+        "أو فقط أرسل رقم المعاملة مباشرة."
+    )
+
+# ------------------ إعداد البوت وحلقة الأحداث الخلفية ------------------
 bot_app = None
 background_loop = None
 loop_thread = None
@@ -138,13 +194,19 @@ loop_thread = None
 if Config.TELEGRAM_BOT_TOKEN:
     try:
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+
+        # إضافة معالجات الأوامر
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
         bot_app.add_handler(CommandHandler("search", search))
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
-        logger.info("✅ تم بناء البوت وإضافة المعالجات")
+
+        # معالج ذكي لأي رسالة نصية ليست أمراً
+        bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
+
+        logger.info("✅ تم بناء البوت وإضافة المعالجات (بما في ذلك الذكي)")
 
         # دالة لتهيئة البوت في حلقة خلفية
         async def init_bot():
@@ -162,22 +224,20 @@ if Config.TELEGRAM_BOT_TOKEN:
         loop_thread = threading.Thread(target=start_background_loop, daemon=True)
         loop_thread.start()
         logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
-        time.sleep(2)  # انتظار قصير لضمان اكتمال التهيئة
+        time.sleep(2)
     except Exception as e:
         logger.error(f"❌ فشل إعداد البوت: {e}")
         bot_app = None
 
-# ---------- Webhook ----------
+# ------------------ Webhook ------------------
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if bot_app is None or background_loop is None:
         return "Bot not initialized", 500
     try:
-        # تسجيل وصول التحديث
         logger.info("📩 تم استقبال طلب webhook")
         json_str = request.get_data(as_text=True)
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        # جدولة معالجة التحديث في الحلقة الخلفية
         asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
         return "OK"
     except Exception as e:
@@ -186,19 +246,16 @@ def webhook():
 
 def set_webhook_sync():
     if bot_app is None or not Config.WEB_APP_URL:
-        logger.warning("لا يمكن تعيين webhook: bot_app أو WEB_APP_URL غير معرف")
         return
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
     token = Config.TELEGRAM_BOT_TOKEN
     try:
-        # حذف webhook القديم
         del_resp = requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
         if del_resp.status_code == 200:
             logger.info("✅ تم حذف webhook القديم")
         else:
             logger.warning(f"⚠️ فشل حذف webhook القديم: {del_resp.text}")
 
-        # تعيين webhook الجديد
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/setWebhook",
             data={"url": webhook_url}
@@ -217,7 +274,7 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ---------- مراقبة المعاملات الجديدة باستخدام APScheduler ----------
+# ------------------ مراقبة المعاملات الجديدة (APScheduler) ------------------
 last_row_count = 0
 
 def check_new_transactions():
@@ -246,6 +303,15 @@ def check_new_transactions():
                             qr_url
                         )
                         logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
+                        # تسجيل حدث الإنشاء في TransactionHistory
+                        history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+                        if history_ws:
+                            history_ws.append_row([
+                                datetime.now().isoformat(),
+                                transaction_id,
+                                "تم إنشاء المعاملة",
+                                "النظام"
+                            ])
                     except Exception as e:
                         logger.error(f"❌ فشل إرسال إيميل للمعاملة {transaction_id}: {e}")
                 else:
@@ -272,51 +338,11 @@ if sheets_client:
     logger.info("🔍 بدأت مراقبة المعاملات الجديدة باستخدام APScheduler")
     atexit.register(lambda: scheduler.shutdown())
 
-# ---------- صفحات HTML (كما هي) ----------
-INDEX_HTML = """<!DOCTYPE html>
-<html dir="rtl"><head><meta charset="UTF-8"><title>المعاملات</title></head>
-<body><h1>قائمة المعاملات</h1><div id="transactions"></div>
-<script>
-fetch('/api/transactions').then(r=>r.json()).then(data => {
-    let html = '<table border="1"><tr><th>ID</th><th>الاسم</th><th>الحالة</th><th>الموظف</th></tr>';
-    data.forEach(t => { html += `<tr><td>${t.id}</td><td>${t.name}</td><td>${t.status}</td><td>${t.employee}</td></tr>`; });
-    html += '</table>';
-    document.getElementById('transactions').innerHTML = html;
-});
-</script></body></html>"""
+# ------------------ نقاط نهاية API ------------------
 
-EDIT_HTML = """<!DOCTYPE html>
-<html dir="rtl"><head><meta charset="UTF-8"><title>تعديل معاملة</title></head>
-<body><h1>تعديل المعاملة <span id="tid"></span></h1><div id="form"></div>
-<script>
-const id = window.location.pathname.split('/').pop();
-document.getElementById('tid').innerText = id;
-fetch(`/api/transaction/${id}`).then(r=>r.json()).then(data => {
-    let form = '<form id="editForm">';
-    for (let key in data) { form += `<label>${key}: <input name="${key}" value="${data[key]}"></label><br>`; }
-    form += '<button type="submit">حفظ</button></form>';
-    document.getElementById('form').innerHTML = form;
-    document.getElementById('editForm').onsubmit = async (e) => {
-        e.preventDefault();
-        const formData = new FormData(e.target);
-        const updates = Object.fromEntries(formData.entries());
-        const res = await fetch(`/api/transaction/${id}`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(updates) });
-        const result = await res.json();
-        alert(result.message);
-    };
-});
-</script></body></html>"""
-
-@app.route('/')
-def index():
-    return render_template_string(INDEX_HTML)
-
-@app.route('/transaction/<id>')
-def edit_transaction_page(id):
-    return render_template_string(EDIT_HTML)
-
-@app.route('/api/transactions')
+@app.route('/api/transactions', methods=['GET'])
 def api_transactions():
+    """قائمة مختصرة للمعاملات (للوحة التحكم)"""
     if not sheets_client:
         return jsonify([])
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
@@ -334,11 +360,15 @@ def api_transactions():
 def api_transaction(id):
     if not sheets_client:
         return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
+
+    # GET: جلب بيانات المعاملة
     if request.method == 'GET':
         data = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
         if not data:
             return jsonify({'error': 'Not found'}), 404
         return jsonify(data['data'])
+
+    # POST: تحديث المعاملة
     else:
         updates = request.json
         row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
@@ -347,14 +377,284 @@ def api_transaction(id):
         row = row_info['row']
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
+
+        # تطبيق التحديثات
         for key, value in updates.items():
             if key in headers:
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
+
+        # تحديث حقل "آخر تعديل بتاريخ"
         if 'آخر تعديل بتاريخ' in headers:
             col = headers.index('آخر تعديل بتاريخ') + 1
             ws.update_cell(row, col, datetime.now().isoformat())
+
+        # تسجيل الحركة في TransactionHistory
+        try:
+            history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+            if history_ws:
+                history_ws.append_row([
+                    datetime.now().isoformat(),
+                    id,
+                    f"تم تحديث الحقول: {', '.join(updates.keys())}",
+                    updates.get('الموظف المسؤول', 'غير معروف')
+                ])
+        except Exception as e:
+            logger.error(f"فشل تسجيل التاريخ: {e}")
+
+        # إرسال إشعار للمدير عبر البوت
+        if Config.ADMIN_CHAT_ID and background_loop and bot_app:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    bot_app.bot.send_message(
+                        chat_id=Config.ADMIN_CHAT_ID,
+                        text=f"✏️ *تحديث معاملة*\n"
+                             f"المعامدة: {id}\n"
+                             f"تم تعديل الحقول: {', '.join(updates.keys())}\n"
+                             f"بواسطة: {updates.get('الموظف المسؤول', 'غير معروف')}",
+                        parse_mode='Markdown'
+                    ),
+                    background_loop
+                )
+            except Exception as e:
+                logger.error(f"فشل إرسال إشعار البوت: {e}")
+
         return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
+
+@app.route('/api/history/<id>')
+def api_transaction_history(id):
+    """جلب سجل تتبع معاملة محددة"""
+    if not sheets_client:
+        return jsonify([])
+    try:
+        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+        if not ws:
+            return jsonify([])
+        records = ws.get_all_records()
+        # فلتر حسب ID (نتوقع وجود عمود ID في ورقة التاريخ)
+        history = [
+            {'time': r.get('timestamp', ''), 'action': r.get('action', '')}
+            for r in records if str(r.get('ID')) == id
+        ]
+        # ترتيب تنازلي (الأحدث أولاً)
+        history.sort(key=lambda x: x['time'], reverse=True)
+        return jsonify(history)
+    except Exception as e:
+        logger.error(f"خطأ في جلب التاريخ: {e}")
+        return jsonify([])
+
+# ------------------ صفحات HTML ------------------
+INDEX_HTML = """<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>المعاملات</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-6xl mx-auto">
+        <h1 class="text-2xl font-bold mb-4">📋 جميع المعاملات</h1>
+        <div class="bg-white rounded-xl shadow overflow-x-auto">
+            <table class="min-w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-2 text-right">ID</th>
+                        <th class="px-4 py-2 text-right">الاسم</th>
+                        <th class="px-4 py-2 text-right">الحالة</th>
+                        <th class="px-4 py-2 text-right">الموظف</th>
+                        <th class="px-4 py-2 text-right"></th>
+                    </tr>
+                </thead>
+                <tbody id="transactions"></tbody>
+            </table>
+        </div>
+    </div>
+    <script>
+        fetch('/api/transactions').then(r=>r.json()).then(data => {
+            const tbody = document.getElementById('transactions');
+            data.forEach(t => {
+                const row = `<tr class="border-t">
+                    <td class="px-4 py-2">${t.id}</td>
+                    <td class="px-4 py-2">${t.name}</td>
+                    <td class="px-4 py-2">${t.status}</td>
+                    <td class="px-4 py-2">${t.employee}</td>
+                    <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
+                </tr>`;
+                tbody.innerHTML += row;
+            });
+        });
+    </script>
+</body>
+</html>"""
+
+EDIT_HTML = """
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+    <title>تفاصيل المعاملة</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap');
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        .ios-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); }
+        .ios-input { background: rgba(249,250,251,0.9); border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 16px; font-size: 16px; transition: all 0.2s; }
+        .ios-input:focus { border-color: #007aff; outline: none; box-shadow: 0 0 0 3px rgba(0,122,255,0.1); }
+        .label-ios { font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }
+        .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }
+        .timeline-dot { width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }
+    </style>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-3xl mx-auto">
+        <!-- عنوان الصفحة -->
+        <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
+            <h1 class="text-xl font-semibold text-gray-800">🔍 تتبع المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
+            <a href="/" class="text-blue-500 text-sm">← العودة</a>
+        </div>
+
+        <!-- قسم القراءة فقط (بيانات أساسية) -->
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold text-gray-700 mb-3">📋 معلومات أساسية</h2>
+            <div id="readonly-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+        </div>
+
+        <!-- قسم التعديل (الحقول القابلة للتعديل) -->
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold text-gray-700 mb-3">✏️ تحديث البيانات</h2>
+            <form id="editForm" class="space-y-4">
+                <div id="editable-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                <button type="submit" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-4 rounded-xl transition duration-200 shadow-sm">💾 حفظ التغييرات</button>
+            </form>
+        </div>
+
+        <!-- سجل التتبع (Timeline) -->
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold text-gray-700 mb-3">📜 سجل الحركات</h2>
+            <div id="history-timeline" class="space-y-2"></div>
+        </div>
+
+        <!-- رسالة نجاح/خطأ -->
+        <div id="message" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg opacity-0 transition-opacity duration-300"></div>
+    </div>
+
+    <script>
+        const id = window.location.pathname.split('/').pop();
+        document.getElementById('transaction-id').innerText = id;
+
+        function showMessage(text, isError = false) {
+            const msgDiv = document.getElementById('message');
+            msgDiv.innerText = text;
+            msgDiv.classList.remove('opacity-0');
+            msgDiv.classList.add('opacity-100');
+            if (isError) msgDiv.classList.add('bg-red-600');
+            else msgDiv.classList.remove('bg-red-600');
+            setTimeout(() => msgDiv.classList.remove('opacity-100'), 3000);
+        }
+
+        // تحميل بيانات المعاملة
+        fetch(`/api/transaction/${id}`)
+            .then(res => res.ok ? res.json() : Promise.reject('فشل التحميل'))
+            .then(data => {
+                // الحقول للقراءة فقط (B:G)
+                const readonlyKeys = [
+                    'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
+                    'القسم', 'نوع المعاملة', 'المرافقات'
+                ];
+                const readonlyContainer = document.getElementById('readonly-fields');
+                readonlyContainer.innerHTML = '';
+                readonlyKeys.forEach(key => {
+                    if (data[key] !== undefined) {
+                        const value = data[key] || '-';
+                        let display = value;
+                        if (key === 'المرافقات' && value.startsWith('http')) {
+                            display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
+                        }
+                        readonlyContainer.innerHTML += `
+                            <div class="bg-gray-50 p-3 rounded-xl">
+                                <span class="label-ios">${key}</span>
+                                <div class="text-gray-900 mt-1">${display}</div>
+                            </div>
+                        `;
+                    }
+                });
+
+                // الحقول القابلة للتعديل (جميع المفاتيح ما عدا القراءة فقط و ID و LOG_JSON)
+                const editableKeys = Object.keys(data).filter(k => !readonlyKeys.includes(k) && k !== 'ID' && k !== 'LOG_JSON');
+                const editableContainer = document.getElementById('editable-fields');
+                editableContainer.innerHTML = '';
+                editableKeys.forEach(key => {
+                    editableContainer.innerHTML += `
+                        <div>
+                            <label class="label-ios">${key}</label>
+                            <input type="text" name="${key}" value="${data[key] || ''}" class="ios-input w-full">
+                        </div>
+                    `;
+                });
+            })
+            .catch(err => {
+                document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة</div>';
+            });
+
+        // حفظ التغييرات
+        document.getElementById('editForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const updates = Object.fromEntries(formData.entries());
+
+            const res = await fetch(`/api/transaction/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates)
+            });
+            const result = await res.json();
+            if (result.success) {
+                showMessage('✅ تم الحفظ بنجاح');
+                loadHistory();
+            } else {
+                showMessage('❌ فشل الحفظ', true);
+            }
+        });
+
+        // تحميل سجل التتبع
+        function loadHistory() {
+            fetch(`/api/history/${id}`)
+                .then(res => res.json())
+                .then(history => {
+                    const timeline = document.getElementById('history-timeline');
+                    if (history.length === 0) {
+                        timeline.innerHTML = '<p class="text-gray-500">لا يوجد سجل بعد</p>';
+                        return;
+                    }
+                    let html = '';
+                    history.forEach(item => {
+                        html += `
+                            <div class="timeline-item">
+                                <span class="timeline-dot"></span>
+                                <span class="text-sm text-gray-500">${item.time}</span>
+                                <p class="text-gray-800">${item.action}</p>
+                            </div>
+                        `;
+                    });
+                    timeline.innerHTML = html;
+                });
+        }
+
+        loadHistory();
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(INDEX_HTML)
+
+@app.route('/transaction/<id>')
+def edit_transaction_page(id):
+    return render_template_string(EDIT_HTML)
 
 @app.route('/test-email')
 def test_email():
