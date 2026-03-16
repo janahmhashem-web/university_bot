@@ -41,9 +41,9 @@ class AIAssistant:
 أجب بلغة عربية فصيحة ومهذبة. إذا سأل عن معاملة معينة، اطلب رقمها. إذا سأل عن إحصائيات، قدمها من المعلومات المتاحة. كن مفيداً.
 """
         try:
-            # اختر أحد النماذج المتاحة (مثلاً gemini-2.0-flash)
+            # ✅ استخدم اسم نموذج صحيح من القائمة (مع أو بدون البادئة models/)
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='models/gemini-2.0-flash',  # جرب بهذا الاسم أولاً
                 contents=prompt
             )
             return response.text
