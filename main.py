@@ -312,7 +312,7 @@ def check_new_transactions():
                         logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
                         continue
 
-                # كتابة رابط المعاملة في العمود U كـ HYPERLINK (للمدير)
+                # كتابة رابط المعاملة في العمود U (للمدير)
                 transaction_link_admin = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
                 hyperlink_formula = f'=HYPERLINK("{transaction_link_admin}", "تعديل")'
                 try:
@@ -326,23 +326,19 @@ def check_new_transactions():
                 if qr_ws:
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
-                    # رابط العرض للمستخدم العادي
                     view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
                     qr_image_url = QRGenerator.get_qr_url(view_link)
                     qr_ws.append_row([
                         name,
                         email,
                         transaction_id,
-                        view_link,      # نص مؤقت
-                        qr_image_url,   # نص مؤقت
-                        view_link       # نص مؤقت
+                        view_link,
+                        qr_image_url,
+                        view_link
                     ])
                     new_row_num = len(qr_ws.get_all_values())
-                    # تحديث العمود D إلى HYPERLINK
                     qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                    # تحديث العمود E إلى HYPERLINK لصفحة عرض QR (يمكن تحسينها لاحقاً)
                     qr_ws.update_cell(new_row_num, 5, f'=HYPERLINK("{view_link}", "عرض QR")')
-                    # تحديث العمود F إلى HYPERLINK
                     qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{view_link}", "رابط آخر")')
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
@@ -527,7 +523,6 @@ def test_email():
     return "تم الإرسال" if success else "فشل"
 
 # ------------------ صفحات HTML ------------------
-# صفحة جميع المعاملات (للمدير فقط)
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
@@ -572,7 +567,6 @@ INDEX_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
-# صفحة تعديل المعاملة (للمدير)
 EDIT_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -638,7 +632,6 @@ EDIT_HTML = """
         fetch(`/api/transaction/${id}`)
             .then(res => res.ok ? res.json() : Promise.reject())
             .then(data => {
-                // الحقول للقراءة فقط (نضيف رقم الهاتف والبريد هنا)
                 const readonlyKeys = [
                     'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
                     'القسم', 'نوع المعاملة', 'المرافقات'
@@ -661,10 +654,7 @@ EDIT_HTML = """
                     }
                 });
 
-                // الحقول المحظورة من التحرير (لا تظهر في الواجهة)
                 const excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط'];
-
-                // الحقول القابلة للتعديل
                 const editableKeys = Object.keys(data).filter(k => !readonlyKeys.includes(k) && !excluded.includes(k));
                 const ec = document.getElementById('editable-fields');
                 ec.innerHTML = '';
@@ -776,7 +766,6 @@ EDIT_HTML = """
 </html>
 """
 
-# صفحة عرض المعاملة للمستخدم العادي (بدون تعديل)
 VIEW_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -821,7 +810,6 @@ VIEW_HTML = """
             .then(data => {
                 const fieldsDiv = document.getElementById('fields');
                 fieldsDiv.innerHTML = '';
-                // نعرض جميع الحقول ما عدا الحساسة
                 const excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط'];
                 for (let key in data) {
                     if (!excluded.includes(key)) {
