@@ -16,11 +16,9 @@ class EmailService:
 
             logger.info(f"📧 محاولة إرسال إيميل عبر SendGrid إلى {customer_email}")
 
-            # الروابط
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
 
-            # محتوى HTML
             html_content = f"""
             <html>
             <body dir="rtl">
@@ -36,7 +34,7 @@ class EmailService:
             """
 
             message = Mail(
-                from_email=Config.EMAIL_USER,  # يمكنك تغييره لاحقاً إذا أردت
+                from_email=Config.EMAIL_USER,
                 to_emails=customer_email,
                 subject=f'📄 معاملة جديدة: {transaction_id}',
                 html_content=html_content
