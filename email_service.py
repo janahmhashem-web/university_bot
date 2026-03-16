@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class EmailService:
     @staticmethod
-    def send_customer_email(customer_email, customer_name, transaction_id, qr_image_url):
+    def send_customer_email(customer_email, customer_name, transaction_id, qr_page_url):
         try:
             if not customer_email:
                 logger.error("❌ البريد الإلكتروني فارغ!")
@@ -29,7 +29,7 @@ class EmailService:
             <html>
             <body dir="rtl">
                 <p>رقم المعاملة: {transaction_id}</p>
-                <p>رابط QR: <a href="{qr_image_url}">اضغط هنا</a></p>
+                <p>رابط QR: <a href="{qr_page_url}">اضغط هنا لعرض QR</a></p>
                 <p>رابط البوت: <a href="{bot_link}">@{Config.BOT_USERNAME}</a></p>
             </body>
             </html>

@@ -312,12 +312,12 @@ def check_new_transactions():
                         logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
                         continue
 
-                # كتابة رابط المعاملة في العمود U (للمدير)
-                transaction_link_admin = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
-                hyperlink_formula = f'=HYPERLINK("{transaction_link_admin}", "تعديل")'
+                # كتابة رابط العرض (للمستخدم العادي) في العمود U
+                view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+                hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
                 try:
                     ws.update_cell(row_number, 21, hyperlink_formula)
-                    logger.info(f"🔗 تم كتابة رابط التعديل في العمود U للصف {row_number}")
+                    logger.info(f"🔗 تم كتابة رابط العرض في العمود U للصف {row_number}")
                 except Exception as e:
                     logger.error(f"❌ فشل كتابة الرابط للصف {row_number}: {e}")
 
@@ -326,20 +326,26 @@ def check_new_transactions():
                 if qr_ws:
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
-                    view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+                    # رابط صورة QR من الخدمة الخارجية
                     qr_image_url = QRGenerator.get_qr_url(view_link)
+                    # رابط صفحة عرض QR الكبير
+                    qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
+                    
                     qr_ws.append_row([
                         name,
                         email,
                         transaction_id,
-                        view_link,
-                        qr_image_url,
-                        view_link
+                        view_link,               # العمود D: رابط المعاملة
+                        qr_image_url,            # العمود E: رابط صورة QR (نص مؤقت)
+                        qr_page_link             # العمود F: رابط صفحة QR
                     ])
                     new_row_num = len(qr_ws.get_all_values())
+                    # تحديث العمود D إلى HYPERLINK
                     qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                    qr_ws.update_cell(new_row_num, 5, f'=HYPERLINK("{view_link}", "عرض QR")')
-                    qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{view_link}", "رابط آخر")')
+                    # تحديث العمود E إلى IMAGE (عرض صورة QR في الخلية)
+                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
+                    # تحديث العمود F إلى HYPERLINK
+                    qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
                 # إرسال الإيميل
@@ -348,13 +354,12 @@ def check_new_transactions():
                 logger.info(f"📧 قراءة البريد من الشيت: '{customer_email}' للمعاملة {transaction_id}")
                 if transaction_id and customer_email:
                     try:
-                        view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
-                        qr_url = QRGenerator.get_qr_url(view_link)
+                        qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
                         success = EmailService.send_customer_email(
                             customer_email,
                             customer_name,
                             transaction_id,
-                            qr_url
+                            qr_page_link   # نرسل رابط صفحة QR الكبيرة
                         )
                         if success:
                             logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
@@ -519,8 +524,46 @@ def ping():
 
 @app.route('/test-email')
 def test_email():
-    success = EmailService.send_customer_email(Config.EMAIL_USER, "اختبار", "TEST123", "https://example.com/qr.png")
+    success = EmailService.send_customer_email(Config.EMAIL_USER, "اختبار", "TEST123", f"{Config.WEB_APP_URL}/qr/TEST123")
     return "تم الإرسال" if success else "فشل"
+
+# ------------------ صفحة عرض QR كبيرة ------------------
+@app.route('/qr/<id>')
+def qr_page(id):
+    # بناء رابط العرض
+    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    # رابط صورة QR من الخدمة الخارجية
+    qr_image_url = QRGenerator.get_qr_url(view_link)
+    html = f"""
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <title>QR Code للمعاملة {id}</title>
+        <style>
+            body {{
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+                background-color: #f5f5f5;
+            }}
+            img {{
+                max-width: 90%;
+                max-height: 90%;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            }}
+        </style>
+    </head>
+    <body>
+        <img src="{qr_image_url}" alt="QR Code للمعاملة {id}">
+    </body>
+    </html>
+    """
+    return html
 
 # ------------------ صفحات HTML ------------------
 INDEX_HTML = """<!DOCTYPE html>
