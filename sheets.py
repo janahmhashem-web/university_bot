@@ -45,13 +45,11 @@ class GoogleSheetsClient:
         return []
 
     def get_row_by_id(self, sheet_name, transaction_id):
-        """البحث عن صف بواسطة ID في العمود H (العمود 8)"""
         ws = self.get_worksheet(sheet_name)
         if not ws:
             return None
         try:
-            # البحث في العمود H فقط
-            cell = ws.find(transaction_id, in_column=8)
+            cell = ws.find(transaction_id, in_column=8)  # العمود H
             if cell:
                 row_data = ws.row_values(cell.row)
                 headers = ws.row_values(1)
