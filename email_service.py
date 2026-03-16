@@ -1,7 +1,7 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os
 import logging
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -13,21 +13,15 @@ class EmailService:
             if not customer_email:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
-            if not transaction_id:
-                logger.error("❌ رقم المعاملة فارغ!")
-                return False
 
-            logger.info(f"📧 محاولة إرسال إيميل إلى {customer_email}")
+            logger.info(f"📧 محاولة إرسال إيميل عبر SendGrid إلى {customer_email}")
 
+            # الروابط
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
 
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = f'📄 معاملة جديدة: {transaction_id}'
-            msg['From'] = Config.EMAIL_USER
-            msg['To'] = customer_email
-
-            html = f"""
+            # محتوى HTML
+            html_content = f"""
             <html>
             <body dir="rtl">
                 <p>مرحباً {customer_name}،</p>
@@ -40,21 +34,24 @@ class EmailService:
             </body>
             </html>
             """
-            msg.attach(MIMEText(html, 'html'))
 
-            with smtplib.SMTP(Config.EMAIL_HOST, Config.EMAIL_PORT, timeout=10) as server:
-                server.starttls()
-                server.login(Config.EMAIL_USER, Config.EMAIL_PASSWORD)
-                server.send_message(msg)
+            message = Mail(
+                from_email=Config.EMAIL_USER,  # يمكنك تغييره لاحقاً إذا أردت
+                to_emails=customer_email,
+                subject=f'📄 معاملة جديدة: {transaction_id}',
+                html_content=html_content
+            )
 
-            logger.info(f"✅ تم إرسال البريد إلى {customer_email}")
-            return True
-        except smtplib.SMTPAuthenticationError:
-            logger.error("❌ فشل المصادقة. تحقق من كلمة المرور.")
-            return False
-        except smtplib.SMTPException as e:
-            logger.error(f"❌ خطأ SMTP: {e}")
-            return False
+            sg = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
+            response = sg.send(message)
+
+            if response.status_code == 202:
+                logger.info(f"✅ تم إرسال الإيميل عبر SendGrid إلى {customer_email}")
+                return True
+            else:
+                logger.error(f"❌ فشل SendGrid: {response.status_code}")
+                return False
+
         except Exception as e:
-            logger.error(f"❌ خطأ عام: {e}", exc_info=True)
+            logger.error(f"❌ خطأ في إرسال الإيميل: {e}", exc_info=True)
             return False
