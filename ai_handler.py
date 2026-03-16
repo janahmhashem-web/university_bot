@@ -2,7 +2,7 @@ import os
 import logging
 from config import Config
 from sheets import GoogleSheetsClient
-from google import genai
+import google.generativeai as genai
 
 logger = logging.getLogger(__name__)
 
@@ -10,43 +10,24 @@ class AIAssistant:
     def __init__(self):
         self.api_key = os.getenv('GOOGLE_API_KEY')
         if not self.api_key:
-            logger.warning("⚠️ GOOGLE_API_KEY غير موجود، الذكاء الاصطناعي معطل")
-            self.client = None
+            logger.warning("⚠️ GOOGLE_API_KEY غير موجود")
+            self.model = None
         else:
             try:
-                self.client = genai.Client(api_key=self.api_key)
+                genai.configure(api_key=self.api_key)
+                self.model = genai.GenerativeModel('gemini-2.0-flash')  # اختر نموذجاً من القائمة
                 self.sheets = GoogleSheetsClient()
-                logger.info("✅ تم تهيئة Google Gen AI")
+                logger.info("✅ تم تهيئة Gemini AI (بالمكتبة القديمة)")
             except Exception as e:
-                logger.error(f"❌ فشل تهيئة Gemini: {e}")
-                self.client = None
+                logger.error(f"❌ فشل التهيئة: {e}")
+                self.model = None
 
     async def get_response(self, user_message, user_id, user_name=""):
-        if not self.client:
-            return "عذراً، خدمة الذكاء الاصطناعي غير متاحة حالياً."
-
-        context = ""
+        if not self.model:
+            return "الذكاء الاصطناعي غير متاح."
         try:
-            records = self.sheets.get_all_records(Config.SHEET_MANAGER)
-            total = len(records)
-            context = f"يوجد حالياً {total} معاملة في النظام."
-        except:
-            pass
-
-        prompt = f"""أنت مساعد ذكي لنظام إدارة المعاملات.
-المستخدم: {user_name} (ID: {user_id})
-معلومات عامة: {context}
-رسالة المستخدم: {user_message}
-
-أجب بلغة عربية فصيحة ومهذبة. إذا سأل عن معاملة معينة، اطلب رقمها. إذا سأل عن إحصائيات، قدمها من المعلومات المتاحة. كن مفيداً.
-"""
-        try:
-            # ✅ استخدم اسم نموذج صحيح من القائمة (مع أو بدون البادئة models/)
-            response = self.client.models.generate_content(
-                model='models/gemini-2.0-flash',  # جرب بهذا الاسم أولاً
-                contents=prompt
-            )
+            response = self.model.generate_content(user_message)
             return response.text
         except Exception as e:
-            logger.error(f"❌ خطأ في Gemini: {e}")
-            return "عذراً، حدث خطأ. حاول مرة أخرى."
+            logger.error(f"خطأ: {e}")
+            return "حدث خطأ."
