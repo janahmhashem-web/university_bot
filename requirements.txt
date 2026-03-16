@@ -13,4 +13,4 @@ apscheduler==3.10.4
 requests==2.32.5
 aiohttp==3.9.5
 openai>=1.0.0
-sendgrid==6.10.1
+sendgrid==6.12.5
