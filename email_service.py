@@ -10,9 +10,14 @@ class EmailService:
     @staticmethod
     def send_customer_email(customer_email, customer_name, transaction_id, qr_image_url):
         try:
-            if not customer_email or not transaction_id:
-                logger.error("❌ بيانات الإيميل ناقصة: البريد أو ID فارغ")
+            if not customer_email:
+                logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
+            if not transaction_id:
+                logger.error("❌ رقم المعاملة فارغ!")
+                return False
+
+            logger.info(f"📧 محاولة إرسال إيميل إلى {customer_email} للمعاملة {transaction_id}")
 
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             msg = MIMEMultipart('alternative')
@@ -36,12 +41,11 @@ class EmailService:
                 server.login(Config.EMAIL_USER, Config.EMAIL_PASSWORD)
                 server.send_message(msg)
 
-            logger.info(f"✅ تم إرسال البريد إلى {customer_email} للمعاملة {transaction_id}")
+            logger.info(f"✅ تم إرسال البريد بنجاح إلى {customer_email}")
             return True
-
-        except smtplib.SMTPAuthenticationError:
-            logger.error("❌ فشل المصادقة مع Gmail. تأكد من استخدام كلمة مرور تطبيق (بدون مسافات)")
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"❌ فشل المصادقة مع Gmail: {e}. تأكد من استخدام كلمة مرور تطبيق صحيحة (بدون مسافات)")
             return False
         except Exception as e:
-            logger.error(f"❌ خطأ غير متوقع في إرسال البريد: {e}")
+            logger.error(f"❌ خطأ غير متوقع في إرسال البريد: {e}", exc_info=True)
             return False

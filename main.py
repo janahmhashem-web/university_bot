@@ -73,7 +73,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
                     if key in data and data[key]:
                         msg += f"• {key}: {data[key]}\n"
-                msg += f"\n🔗 [رابط المتابعة]({Config.WEB_APP_URL}/transaction/{transaction_id})"
+                msg += f"\n🔗 [رابط المتابعة]({Config.WEB_APP_URL}/view/{transaction_id})"
                 await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
             else:
                 await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
@@ -181,7 +181,6 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await get_history(update, context)
             return
 
-    # استخدام الذكاء الاصطناعي إذا لم نفهم
     await ai_chat_handler(update, context)
 
 async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -208,7 +207,7 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
-        logger.info("✅ تم بناء البوت وإضافة المعالجات (بما في ذلك الذكاء الاصطناعي)")
+        logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
         async def init_bot():
             await bot_app.initialize()
@@ -313,12 +312,12 @@ def check_new_transactions():
                         logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
                         continue
 
-                # كتابة رابط المعاملة في العمود U كـ HYPERLINK
-                transaction_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
-                hyperlink_formula = f'=HYPERLINK("{transaction_link}", "عرض المعاملة")'
+                # كتابة رابط المعاملة في العمود U كـ HYPERLINK (للمدير)
+                transaction_link_admin = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
+                hyperlink_formula = f'=HYPERLINK("{transaction_link_admin}", "تعديل")'
                 try:
                     ws.update_cell(row_number, 21, hyperlink_formula)
-                    logger.info(f"🔗 تم كتابة الرابط في العمود U للصف {row_number}")
+                    logger.info(f"🔗 تم كتابة رابط التعديل في العمود U للصف {row_number}")
                 except Exception as e:
                     logger.error(f"❌ فشل كتابة الرابط للصف {row_number}: {e}")
 
@@ -327,30 +326,34 @@ def check_new_transactions():
                 if qr_ws:
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
-                    qr_image_url = QRGenerator.get_qr_url(transaction_link)
+                    # رابط العرض للمستخدم العادي
+                    view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+                    qr_image_url = QRGenerator.get_qr_url(view_link)
                     qr_ws.append_row([
                         name,
                         email,
                         transaction_id,
-                        transaction_link,   # نص مؤقت
-                        qr_image_url,       # نص مؤقت
-                        transaction_link    # نص مؤقت
+                        view_link,      # نص مؤقت
+                        qr_image_url,   # نص مؤقت
+                        view_link       # نص مؤقت
                     ])
                     new_row_num = len(qr_ws.get_all_values())
                     # تحديث العمود D إلى HYPERLINK
-                    qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{transaction_link}", "رابط المعاملة")')
-                    # تحديث العمود E إلى IMAGE
-                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
+                    qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
+                    # تحديث العمود E إلى HYPERLINK لصفحة عرض QR (يمكن تحسينها لاحقاً)
+                    qr_ws.update_cell(new_row_num, 5, f'=HYPERLINK("{view_link}", "عرض QR")')
                     # تحديث العمود F إلى HYPERLINK
-                    qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{transaction_link}", "رابط آخر")')
+                    qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{view_link}", "رابط آخر")')
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
                 # إرسال الإيميل
                 customer_email = new_row.get('البريد الإلكتروني')
                 customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
+                logger.info(f"📧 قراءة البريد من الشيت: '{customer_email}' للمعاملة {transaction_id}")
                 if transaction_id and customer_email:
                     try:
-                        qr_url = QRGenerator.get_qr_url(transaction_link)
+                        view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+                        qr_url = QRGenerator.get_qr_url(view_link)
                         success = EmailService.send_customer_email(
                             customer_email,
                             customer_name,
@@ -524,40 +527,348 @@ def test_email():
     return "تم الإرسال" if success else "فشل"
 
 # ------------------ صفحات HTML ------------------
+# صفحة جميع المعاملات (للمدير فقط)
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>المعاملات</title><script src="https://cdn.tailwindcss.com"></script></head>
-<body class="bg-gray-100 p-4"><div class="max-w-6xl mx-auto"><h1 class="text-2xl font-bold mb-4">📋 جميع المعاملات</h1><div class="bg-white rounded-xl shadow overflow-x-auto"><table class="min-w-full"><thead class="bg-gray-50"><tr><th class="px-4 py-2 text-right">ID</th><th class="px-4 py-2 text-right">الاسم</th><th class="px-4 py-2 text-right">الحالة</th><th class="px-4 py-2 text-right">الموظف</th><th class="px-4 py-2 text-right"></th></tr></thead><tbody id="transactions"></tbody></table></div></div>
-<script>
-fetch('/api/transactions').then(r=>r.json()).then(data=>{const tbody=document.getElementById('transactions');data.forEach(t=>{tbody.innerHTML+=`<tr class="border-t"><td class="px-4 py-2">${t.id}</td><td class="px-4 py-2">${t.name}</td><td class="px-4 py-2">${t.status}</td><td class="px-4 py-2">${t.employee}</td><td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td></tr>`})});
-</script></body></html>"""
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>المعاملات</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-6xl mx-auto">
+        <h1 class="text-2xl font-bold mb-4">📋 جميع المعاملات (المدير)</h1>
+        <div class="bg-white rounded-xl shadow overflow-x-auto">
+            <table class="min-w-full">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-4 py-2 text-right">ID</th>
+                        <th class="px-4 py-2 text-right">الاسم</th>
+                        <th class="px-4 py-2 text-right">الحالة</th>
+                        <th class="px-4 py-2 text-right">الموظف</th>
+                        <th class="px-4 py-2 text-right"></th>
+                    </tr>
+                </thead>
+                <tbody id="transactions"></tbody>
+            </table>
+        </div>
+    </div>
+    <script>
+        fetch('/api/transactions').then(r=>r.json()).then(data => {
+            const tbody = document.getElementById('transactions');
+            data.forEach(t => {
+                const row = `<tr class="border-t">
+                    <td class="px-4 py-2">${t.id}</td>
+                    <td class="px-4 py-2">${t.name}</td>
+                    <td class="px-4 py-2">${t.status}</td>
+                    <td class="px-4 py-2">${t.employee}</td>
+                    <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
+                </tr>`;
+                tbody.innerHTML += row;
+            });
+        });
+    </script>
+</body>
+</html>"""
 
-EDIT_HTML = """<!DOCTYPE html>
+# صفحة تعديل المعاملة (للمدير)
+EDIT_HTML = """
+<!DOCTYPE html>
 <html dir="rtl" lang="ar">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes"><title>تفاصيل المعاملة</title><script src="https://cdn.tailwindcss.com"></script><style>@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');*{font-family:'Inter',sans-serif;}.ios-card{background:rgba(255,255,255,0.8);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.3);border-radius:16px;}.ios-input{background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;padding:12px 16px;font-size:16px;}.ios-input:focus{border-color:#007aff;outline:none;box-shadow:0 0 0 3px rgba(0,122,255,0.1);}.label-ios{font-size:14px;font-weight:600;color:#6b7280;margin-bottom:4px;display:block;}.timeline-item{border-right:2px solid #007aff;position:relative;padding-right:20px;margin-bottom:20px;}.timeline-dot{width:12px;height:12px;background:#007aff;border-radius:50%;position:absolute;right:-7px;top:5px;}</style></head>
-<body class="bg-gray-100 p-4"><div class="max-w-3xl mx-auto">
-<div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center"><h1 class="text-xl font-semibold">🔍 تتبع المعاملة <span id="transaction-id" class="text-blue-600"></span></h1><a href="/" class="text-blue-500 text-sm">← العودة</a></div>
-<div class="ios-card rounded-2xl p-5 mb-4 shadow-sm"><h2 class="text-lg font-semibold mb-3">📋 معلومات أساسية</h2><div id="readonly-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div></div>
-<div class="ios-card rounded-2xl p-5 mb-4 shadow-sm"><h2 class="text-lg font-semibold mb-3">✏️ تحديث البيانات</h2><form id="editForm" class="space-y-4"><div id="editable-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div><button type="submit" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-4 rounded-xl transition shadow-sm">💾 حفظ التغييرات</button></form></div>
-<div class="ios-card rounded-2xl p-5 mb-4 shadow-sm"><h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2><div id="history-timeline" class="space-y-2"></div></div>
-<div id="message" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg opacity-0 transition-opacity"></div>
-</div>
-<script>
-const id=window.location.pathname.split('/').pop(); document.getElementById('transaction-id').innerText=id;
-function showMessage(t,e){const m=document.getElementById('message'); m.innerText=t; m.classList.remove('opacity-0'); m.classList.add('opacity-100'); if(e)m.classList.add('bg-red-600'); else m.classList.remove('bg-red-600'); setTimeout(()=>m.classList.remove('opacity-100'),3000);}
-fetch(`/api/transaction/${id}`).then(r=>r.ok?r.json():Promise.reject()).then(data=>{
-    const readonlyKeys=['Timestamp','اسم صاحب المعاملة الثلاثي','رقم الهاتف','البريد الإلكتروني','القسم','نوع المعاملة','المرافقات'];
-    const rc=document.getElementById('readonly-fields'); rc.innerHTML='';
-    readonlyKeys.forEach(k=>{if(data[k]!==undefined){const v=data[k]||'-'; rc.innerHTML+=`<div class="bg-gray-50 p-3 rounded-xl"><span class="label-ios">${k}</span><div class="text-gray-900 mt-1">${v}</div></div>`;}});
-    const excluded=['ID','LOG_JSON','آخر تعديل بتاريخ','آخر تعديل بواسطة','الرابط'];
-    const editableKeys=Object.keys(data).filter(k=>!readonlyKeys.includes(k)&&!excluded.includes(k));
-    const ec=document.getElementById('editable-fields'); ec.innerHTML='';
-    editableKeys.forEach(k=>{ec.innerHTML+=`<div><label class="label-ios">${k}</label><input type="text" name="${k}" value="${data[k]||''}" class="ios-input w-full"></div>`;});
-}).catch(()=>document.body.innerHTML='<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة</div>');
-document.getElementById('editForm').addEventListener('submit',async(e)=>{e.preventDefault();const fd=new FormData(e.target);const updates=Object.fromEntries(fd.entries());const res=await fetch(`/api/transaction/${id}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(updates)});const result=await res.json();if(result.success){showMessage('✅ تم الحفظ');loadHistory();}else showMessage('❌ فشل',true);});
-function loadHistory(){fetch(`/api/history/${id}`).then(r=>r.json()).then(h=>{const t=document.getElementById('history-timeline'); if(h.length===0){t.innerHTML='<p class="text-gray-500">لا يوجد سجل</p>';return;} let html=''; h.forEach(i=>{html+=`<div class="timeline-item"><span class="timeline-dot"></span><span class="text-sm text-gray-500">${i.time}</span><p class="text-gray-800">${i.action}</p><p class="text-xs text-gray-400">${i.user}</p></div>`;}); t.innerHTML=html;});}
-loadHistory();
-</script></body></html>"""
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+    <title>تعديل المعاملة</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        * { font-family: 'Inter', sans-serif; }
+        .ios-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }
+        .ios-input { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 16px; font-size: 16px; width: 100%; }
+        .ios-input:focus { border-color: #007aff; outline: none; box-shadow: 0 0 0 3px rgba(0,122,255,0.1); }
+        .ios-select { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 16px; font-size: 16px; width: 100%; }
+        .label-ios { font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }
+        .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }
+        .timeline-dot { width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }
+    </style>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-3xl mx-auto">
+        <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
+            <h1 class="text-xl font-semibold">🔍 تتبع المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
+            <a href="/" class="text-blue-500 text-sm">← العودة</a>
+        </div>
+
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-3">📋 معلومات أساسية</h2>
+            <div id="readonly-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+        </div>
+
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-3">✏️ تحديث البيانات</h2>
+            <form id="editForm" class="space-y-4">
+                <div id="editable-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+                <button type="submit" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-4 rounded-xl transition shadow-sm">💾 حفظ التغييرات</button>
+            </form>
+        </div>
+
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
+            <div id="history-timeline" class="space-y-2"></div>
+        </div>
+
+        <div id="message" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg opacity-0 transition-opacity"></div>
+    </div>
+
+    <script>
+        const id = window.location.pathname.split('/').pop();
+        document.getElementById('transaction-id').innerText = id;
+
+        function showMessage(text, isError = false) {
+            const msgDiv = document.getElementById('message');
+            msgDiv.innerText = text;
+            msgDiv.classList.remove('opacity-0');
+            msgDiv.classList.add('opacity-100');
+            if (isError) msgDiv.classList.add('bg-red-600');
+            else msgDiv.classList.remove('bg-red-600');
+            setTimeout(() => msgDiv.classList.remove('opacity-100'), 3000);
+        }
+
+        fetch(`/api/transaction/${id}`)
+            .then(res => res.ok ? res.json() : Promise.reject())
+            .then(data => {
+                // الحقول للقراءة فقط (نضيف رقم الهاتف والبريد هنا)
+                const readonlyKeys = [
+                    'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
+                    'القسم', 'نوع المعاملة', 'المرافقات'
+                ];
+                const rc = document.getElementById('readonly-fields');
+                rc.innerHTML = '';
+                readonlyKeys.forEach(key => {
+                    if (data[key] !== undefined) {
+                        const value = data[key] || '-';
+                        let display = value;
+                        if (key === 'المرافقات' && value.startsWith('http')) {
+                            display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
+                        }
+                        rc.innerHTML += `
+                            <div class="bg-gray-50 p-3 rounded-xl">
+                                <span class="label-ios">${key}</span>
+                                <div class="text-gray-900 mt-1">${display}</div>
+                            </div>
+                        `;
+                    }
+                });
+
+                // الحقول المحظورة من التحرير (لا تظهر في الواجهة)
+                const excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط'];
+
+                // الحقول القابلة للتعديل
+                const editableKeys = Object.keys(data).filter(k => !readonlyKeys.includes(k) && !excluded.includes(k));
+                const ec = document.getElementById('editable-fields');
+                ec.innerHTML = '';
+
+                editableKeys.forEach(key => {
+                    let inputType = 'text';
+                    let options = '';
+
+                    if (key.includes('تاريخ')) {
+                        inputType = 'date';
+                    } else if (key === 'الحالة') {
+                        inputType = 'select';
+                        options = `
+                            <select name="${key}" class="ios-select">
+                                <option value="جديد" ${data[key] === 'جديد' ? 'selected' : ''}>جديد</option>
+                                <option value="قيد المعالجة" ${data[key] === 'قيد المعالجة' ? 'selected' : ''}>قيد المعالجة</option>
+                                <option value="مكتملة" ${data[key] === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
+                                <option value="متأخرة" ${data[key] === 'متأخرة' ? 'selected' : ''}>متأخرة</option>
+                            </select>
+                        `;
+                    } else if (key === 'التأخير') {
+                        inputType = 'select';
+                        options = `
+                            <select name="${key}" class="ios-select">
+                                <option value="لا" ${data[key] !== 'نعم' ? 'selected' : ''}>لا</option>
+                                <option value="نعم" ${data[key] === 'نعم' ? 'selected' : ''}>نعم</option>
+                            </select>
+                        `;
+                    } else if (key === 'الأولوية') {
+                        inputType = 'select';
+                        options = `
+                            <select name="${key}" class="ios-select">
+                                <option value="عادية" ${data[key] !== 'مستعجلة' ? 'selected' : ''}>عادية</option>
+                                <option value="مستعجلة" ${data[key] === 'مستعجلة' ? 'selected' : ''}>مستعجلة</option>
+                            </select>
+                        `;
+                    }
+
+                    if (inputType === 'select') {
+                        ec.innerHTML += `
+                            <div>
+                                <label class="label-ios">${key}</label>
+                                ${options}
+                            </div>
+                        `;
+                    } else if (inputType === 'date') {
+                        ec.innerHTML += `
+                            <div>
+                                <label class="label-ios">${key}</label>
+                                <input type="date" name="${key}" value="${data[key] ? data[key].split('T')[0] : ''}" class="ios-input">
+                            </div>
+                        `;
+                    } else {
+                        ec.innerHTML += `
+                            <div>
+                                <label class="label-ios">${key}</label>
+                                <input type="text" name="${key}" value="${data[key] || ''}" class="ios-input">
+                            </div>
+                        `;
+                    }
+                });
+            })
+            .catch(() => {
+                document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة</div>';
+            });
+
+        document.getElementById('editForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const updates = Object.fromEntries(formData.entries());
+            const res = await fetch(`/api/transaction/${id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates)
+            });
+            const result = await res.json();
+            if (result.success) {
+                showMessage('✅ تم الحفظ');
+                loadHistory();
+            } else {
+                showMessage('❌ فشل', true);
+            }
+        });
+
+        function loadHistory() {
+            fetch(`/api/history/${id}`).then(r => r.json()).then(h => {
+                const t = document.getElementById('history-timeline');
+                if (h.length === 0) {
+                    t.innerHTML = '<p class="text-gray-500">لا يوجد سجل</p>';
+                    return;
+                }
+                let html = '';
+                h.forEach(i => {
+                    html += `
+                        <div class="timeline-item">
+                            <span class="timeline-dot"></span>
+                            <span class="text-sm text-gray-500">${i.time}</span>
+                            <p class="text-gray-800">${i.action}</p>
+                            <p class="text-xs text-gray-400">${i.user}</p>
+                        </div>
+                    `;
+                });
+                t.innerHTML = html;
+            });
+        }
+        loadHistory();
+    </script>
+</body>
+</html>
+"""
+
+# صفحة عرض المعاملة للمستخدم العادي (بدون تعديل)
+VIEW_HTML = """
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
+    <title>تفاصيل المعاملة</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        * { font-family: 'Inter', sans-serif; }
+        .ios-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }
+        .label-ios { font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }
+        .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }
+        .timeline-dot { width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }
+    </style>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-3xl mx-auto">
+        <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
+            <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
+            <span class="text-gray-500 text-sm">(للمتابعة فقط)</span>
+        </div>
+
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
+            <div id="fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+        </div>
+
+        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
+            <div id="history-timeline" class="space-y-2"></div>
+        </div>
+    </div>
+
+    <script>
+        const id = window.location.pathname.split('/').pop();
+        document.getElementById('transaction-id').innerText = id;
+
+        fetch(`/api/transaction/${id}`)
+            .then(res => res.ok ? res.json() : Promise.reject())
+            .then(data => {
+                const fieldsDiv = document.getElementById('fields');
+                fieldsDiv.innerHTML = '';
+                // نعرض جميع الحقول ما عدا الحساسة
+                const excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط'];
+                for (let key in data) {
+                    if (!excluded.includes(key)) {
+                        const value = data[key] || '-';
+                        let display = value;
+                        if (key === 'المرافقات' && value.startsWith('http')) {
+                            display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
+                        }
+                        fieldsDiv.innerHTML += `
+                            <div class="bg-gray-50 p-3 rounded-xl">
+                                <span class="label-ios">${key}</span>
+                                <div class="text-gray-900 mt-1">${display}</div>
+                            </div>
+                        `;
+                    }
+                }
+            })
+            .catch(() => {
+                document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة</div>';
+            });
+
+        function loadHistory() {
+            fetch(`/api/history/${id}`).then(r => r.json()).then(h => {
+                const t = document.getElementById('history-timeline');
+                if (h.length === 0) {
+                    t.innerHTML = '<p class="text-gray-500">لا يوجد سجل</p>';
+                    return;
+                }
+                let html = '';
+                h.forEach(i => {
+                    html += `
+                        <div class="timeline-item">
+                            <span class="timeline-dot"></span>
+                            <span class="text-sm text-gray-500">${i.time}</span>
+                            <p class="text-gray-800">${i.action}</p>
+                            <p class="text-xs text-gray-400">${i.user}</p>
+                        </div>
+                    `;
+                });
+                t.innerHTML = html;
+            });
+        }
+        loadHistory();
+    </script>
+</body>
+</html>
+"""
 
 @app.route('/')
 def index():
@@ -566,6 +877,10 @@ def index():
 @app.route('/transaction/<id>')
 def edit_transaction_page(id):
     return render_template_string(EDIT_HTML)
+
+@app.route('/view/<id>')
+def view_transaction_page(id):
+    return render_template_string(VIEW_HTML)
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
