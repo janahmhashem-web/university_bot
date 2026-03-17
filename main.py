@@ -273,10 +273,10 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة (غير متزامنة) ------------------
+# ------------------ مراقبة المعاملات الجديدة (دورية) ------------------
 last_row_count = 0
 
-async def _check_new_transactions_async():
+def check_new_transactions():
     global last_row_count
     try:
         if not sheets_client:
@@ -327,7 +327,6 @@ async def _check_new_transactions_async():
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
                     qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                    # توليد QR محلي بصيغة Base64
                     qr_base64 = QRGenerator.generate_qr(view_link)
 
                     qr_ws.append_row([
@@ -350,7 +349,7 @@ async def _check_new_transactions_async():
                 if transaction_id and customer_email:
                     try:
                         qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                        success = await EmailService.send_customer_email(
+                        success = EmailService.send_customer_email(
                             customer_email,
                             customer_name,
                             transaction_id,
@@ -381,12 +380,6 @@ async def _check_new_transactions_async():
             last_row_count = current_count
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
-
-def check_new_transactions():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(_check_new_transactions_async())
-    loop.close()
 
 # ------------------ جدولة المهام ------------------
 if sheets_client:
@@ -524,8 +517,8 @@ def ping():
     return "pong"
 
 @app.route('/test-email')
-async def test_email():
-    success = await EmailService.send_customer_email(
+def test_email():
+    success = EmailService.send_customer_email(
         Config.EMAIL_USER,
         "اختبار",
         "TEST123",

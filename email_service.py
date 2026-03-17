@@ -1,6 +1,5 @@
 import os
-import aiohttp
-import asyncio
+import requests
 import logging
 from config import Config
 
@@ -8,16 +7,13 @@ logger = logging.getLogger(__name__)
 
 class EmailService:
     @staticmethod
-    async def send_customer_email(customer_email, customer_name, transaction_id, qr_page_url):
-        """
-        إرسال إيميل عبر Lemon Email API
-        """
+    def send_customer_email(customer_email, customer_name, transaction_id, qr_page_url):
         try:
             if not customer_email:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            logger.info(f"📧 محاولة إرسال إيميل عبر Lemon Email إلى {customer_email}")
+            logger.info(f"📧 محاولة إرسال إيميل عبر Brevo إلى {customer_email}")
 
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
@@ -36,37 +32,30 @@ class EmailService:
             </html>
             """
 
-            lemon_api_url = f"{os.getenv('LEMON_EMAIL_URL')}/api/transactional/send"
-            lemon_api_key = os.getenv('LEMON_EMAIL_API_KEY')
-
-            payload = {
-                "fromname": "نظام المعاملات",
-                "fromemail": "no-reply@university-bot.com",
-                "to": customer_email,
-                "subject": f"📄 معاملة جديدة: {transaction_id}",
-                "body": html_content
-            }
-
+            url = "https://api.brevo.com/v3/smtp/email"
             headers = {
-                "Content-Type": "application/json",
-                "X-Auth-APIKey": lemon_api_key
+                "accept": "application/json",
+                "api-key": os.getenv("BREVO_API_KEY"),
+                "content-type": "application/json"
+            }
+            payload = {
+                "sender": {"email": Config.EMAIL_USER, "name": "نظام المعاملات"},
+                "to": [{"email": customer_email, "name": customer_name}],
+                "subject": f"📄 معاملة جديدة: {transaction_id}",
+                "htmlContent": html_content
             }
 
-            async with aiohttp.ClientSession() as session:
-                async with session.post(lemon_api_url, json=payload, headers=headers, timeout=10) as response:
-                    if response.status == 200:
-                        logger.info(f"✅ تم إرسال الإيميل عبر Lemon Email إلى {customer_email}")
-                        return True
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"❌ فشل Lemon Email: {response.status} - {error_text}")
-                        return False
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
 
-        except asyncio.TimeoutError:
+            if response.status_code == 201:
+                logger.info(f"✅ تم إرسال الإيميل عبر Brevo إلى {customer_email}")
+                return True
+            else:
+                logger.error(f"❌ فشل Brevo: {response.status_code} - {response.text}")
+                return False
+
+        except requests.exceptions.Timeout:
             logger.error("❌ مهلة الاتصال انتهت")
-            return False
-        except aiohttp.ClientError as e:
-            logger.error(f"❌ خطأ في الاتصال: {e}")
             return False
         except Exception as e:
             logger.error(f"❌ خطأ غير متوقع: {e}", exc_info=True)
