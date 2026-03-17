@@ -2,15 +2,18 @@ import os
 import logging
 from config import Config
 from sheets import GoogleSheetsClient
-from groq import Groq
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
 class AIAssistant:
     def __init__(self):
-        self.client = Groq(api_key=os.getenv('GROQ_API_KEY'))
+        self.client = OpenAI(
+            api_key=os.getenv('GROQ_API_KEY'),
+            base_url="https://api.groq.com/openai/v1"
+        )
         self.sheets = GoogleSheetsClient()
-        logger.info("✅ تم تهيئة Groq AI (مجاني وسريع)")
+        logger.info("✅ تم تهيئة Groq AI عبر OpenAI library")
 
     async def get_response(self, user_message, user_id, user_name=""):
         try:
@@ -30,18 +33,13 @@ class AIAssistant:
 
 أجب بلغة عربية فصيحة ومهذبة. إذا سأل عن معاملة معينة، اطلب رقمها. إذا سأل عن إحصائيات، قدمها من المعلومات المتاحة. كن مفيداً.
 """
-            # استدعاء Groq
             completion = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",  # نموذج قوي ومجاني
-                messages=[
-                    {"role": "system", "content": "أنت مساعد ذكي."},
-                    {"role": "user", "content": prompt}
-                ],
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
                 temperature=0.7,
                 max_tokens=1000
             )
             return completion.choices[0].message.content
-
         except Exception as e:
-            logger.error(f"❌ خطأ في Groq: {e}")
+            logger.error(f"❌ خطأ في Groq عبر OpenAI: {e}")
             return "عذراً، حدث خطأ. حاول مرة أخرى."
