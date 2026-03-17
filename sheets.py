@@ -49,7 +49,7 @@ class GoogleSheetsClient:
         if not ws:
             return None
         try:
-            cell = ws.find(transaction_id, in_column=8)
+            cell = ws.find(transaction_id, in_column=8)  # العمود H
             if cell:
                 row_data = ws.row_values(cell.row)
                 headers = ws.row_values(1)

@@ -273,7 +273,7 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة (دورية) ------------------
+# ------------------ مراقبة المعاملات الجديدة ------------------
 last_row_count = 0
 
 def check_new_transactions():

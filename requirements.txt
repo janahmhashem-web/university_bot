@@ -1,6 +1,6 @@
-python-telegram-bot==22.6  # متوافق مع httpx>=0.28.1
+python-telegram-bot==22.6
 gspread==6.1.0
-google-auth==2.49.1        # إصدار أحدث
+google-auth==2.49.1
 google-auth-oauthlib==1.3.0
 google-auth-httplib2==0.3.0
 pandas==2.2.3
@@ -11,4 +11,4 @@ Flask==2.3.3
 gunicorn==21.2.0
 apscheduler==3.10.4
 requests==2.32.5
-google-genai==1.67.0
+groq==0.9.0
