@@ -273,10 +273,10 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة ------------------
+# ------------------ مراقبة المعاملات الجديدة (غير متزامنة) ------------------
 last_row_count = 0
 
-def check_new_transactions():
+async def _check_new_transactions_async():
     global last_row_count
     try:
         if not sheets_client:
@@ -312,7 +312,7 @@ def check_new_transactions():
                         logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
                         continue
 
-                # كتابة رابط العرض (للمستخدم العادي) في العمود U
+                # كتابة رابط العرض في العمود U
                 view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
                 hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
                 try:
@@ -321,30 +321,25 @@ def check_new_transactions():
                 except Exception as e:
                     logger.error(f"❌ فشل كتابة الرابط للصف {row_number}: {e}")
 
-                # إدراج صف في شيت QR
+                # إدراج صف في شيت QR مع QR محلي
                 qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
                 if qr_ws:
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
-                    # رابط صورة QR من الخدمة الخارجية
-                    qr_image_url = QRGenerator.get_qr_url(view_link)
-                    # رابط صفحة عرض QR الكبير
                     qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                    
+                    # توليد QR محلي بصيغة Base64
+                    qr_base64 = QRGenerator.generate_qr(view_link)
+
                     qr_ws.append_row([
                         name,
                         email,
                         transaction_id,
-                        view_link,               # العمود D: رابط المعاملة
-                        qr_image_url,            # العمود E: رابط صورة QR (نص مؤقت)
-                        qr_page_link             # العمود F: رابط صفحة QR
+                        view_link,
+                        f'=IMAGE("data:image/png;base64,{qr_base64}")',
+                        qr_page_link
                     ])
                     new_row_num = len(qr_ws.get_all_values())
-                    # تحديث العمود D إلى HYPERLINK
                     qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                    # تحديث العمود E إلى IMAGE (عرض صورة QR في الخلية)
-                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
-                    # تحديث العمود F إلى HYPERLINK
                     qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
@@ -355,11 +350,11 @@ def check_new_transactions():
                 if transaction_id and customer_email:
                     try:
                         qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                        success = EmailService.send_customer_email(
+                        success = await EmailService.send_customer_email(
                             customer_email,
                             customer_name,
                             transaction_id,
-                            qr_page_link   # نرسل رابط صفحة QR الكبيرة
+                            qr_page_link
                         )
                         if success:
                             logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
@@ -386,6 +381,12 @@ def check_new_transactions():
             last_row_count = current_count
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
+
+def check_new_transactions():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(_check_new_transactions_async())
+    loop.close()
 
 # ------------------ جدولة المهام ------------------
 if sheets_client:
@@ -523,17 +524,20 @@ def ping():
     return "pong"
 
 @app.route('/test-email')
-def test_email():
-    success = EmailService.send_customer_email(Config.EMAIL_USER, "اختبار", "TEST123", f"{Config.WEB_APP_URL}/qr/TEST123")
+async def test_email():
+    success = await EmailService.send_customer_email(
+        Config.EMAIL_USER,
+        "اختبار",
+        "TEST123",
+        f"{Config.WEB_APP_URL}/qr/TEST123"
+    )
     return "تم الإرسال" if success else "فشل"
 
 # ------------------ صفحة عرض QR كبيرة ------------------
 @app.route('/qr/<id>')
 def qr_page(id):
-    # بناء رابط العرض
     view_link = f"{Config.WEB_APP_URL}/view/{id}"
-    # رابط صورة QR من الخدمة الخارجية
-    qr_image_url = QRGenerator.get_qr_url(view_link)
+    qr_base64 = QRGenerator.generate_qr(view_link)
     html = f"""
     <!DOCTYPE html>
     <html dir="rtl">
@@ -541,25 +545,12 @@ def qr_page(id):
         <meta charset="UTF-8">
         <title>QR Code للمعاملة {id}</title>
         <style>
-            body {{
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                height: 100vh;
-                margin: 0;
-                background-color: #f5f5f5;
-            }}
-            img {{
-                max-width: 90%;
-                max-height: 90%;
-                border: 1px solid #ddd;
-                border-radius: 8px;
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            }}
+            body {{ display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f5f5f5; }}
+            img {{ max-width: 90%; max-height: 90%; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
         </style>
     </head>
     <body>
-        <img src="{qr_image_url}" alt="QR Code للمعاملة {id}">
+        <img src="data:image/png;base64,{qr_base64}" alt="QR Code للمعاملة {id}">
     </body>
     </html>
     """
