@@ -7,7 +7,8 @@ import asyncio
 import threading
 import time
 import random
-from flask import Flask, request, jsonify, render_template_string
+import base64
+from flask import Flask, request, jsonify, render_template_string, Response
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -321,24 +322,25 @@ def check_new_transactions():
                 except Exception as e:
                     logger.error(f"❌ فشل كتابة الرابط للصف {row_number}: {e}")
 
-                # إدراج صف في شيت QR مع QR محلي
+                # إدراج صف في شيت QR مع رابط صورة حقيقي
                 qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
                 if qr_ws:
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
                     qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                    qr_base64 = QRGenerator.generate_qr(view_link)
+                    qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"  # رابط صورة مباشر
 
                     qr_ws.append_row([
                         name,
                         email,
                         transaction_id,
                         view_link,
-                        f'=IMAGE("data:image/png;base64,{qr_base64}")',
+                        qr_image_url,  # نص مؤقت
                         qr_page_link
                     ])
                     new_row_num = len(qr_ws.get_all_values())
                     qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
+                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')  # صورة مباشرة
                     qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
@@ -548,6 +550,14 @@ def qr_page(id):
     </html>
     """
     return html
+
+# ------------------ مسار صورة QR مباشرة ------------------
+@app.route('/qr_image/<id>')
+def qr_image(id):
+    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    qr_base64 = QRGenerator.generate_qr(view_link)
+    img_data = base64.b64decode(qr_base64)
+    return Response(img_data, mimetype='image/png')
 
 # ------------------ صفحات HTML ------------------
 INDEX_HTML = """<!DOCTYPE html>

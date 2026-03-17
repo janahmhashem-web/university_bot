@@ -17,7 +17,6 @@ class AIAssistant:
 
     async def get_response(self, user_message, user_id, user_name=""):
         try:
-            # بناء السياق من قاعدة البيانات
             context = ""
             try:
                 records = self.sheets.get_all_records(Config.SHEET_MANAGER)
@@ -41,5 +40,5 @@ class AIAssistant:
             )
             return completion.choices[0].message.content
         except Exception as e:
-            logger.error(f"❌ خطأ في Groq عبر OpenAI: {e}")
+            logger.error(f"❌ خطأ في Groq: {e}")
             return "عذراً، حدث خطأ. حاول مرة أخرى."
