@@ -328,19 +328,19 @@ def check_new_transactions():
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
                     qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                    qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"  # رابط صورة مباشر
+                    qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
 
                     qr_ws.append_row([
                         name,
                         email,
                         transaction_id,
                         view_link,
-                        qr_image_url,  # نص مؤقت
+                        qr_image_url,
                         qr_page_link
                     ])
                     new_row_num = len(qr_ws.get_all_values())
                     qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')  # صورة مباشرة
+                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
                     qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
