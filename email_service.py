@@ -1,8 +1,6 @@
 import os
-import smtplib
+import requests
 import logging
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -15,22 +13,11 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            logger.info(f"📧 محاولة إرسال إيميل عبر SMTP إلى {customer_email}")
+            logger.info(f"📧 محاولة إرسال إيميل عبر Brevo API إلى {customer_email}")
 
-            # بيانات SMTP الصحيحة من Brevo (للمصادقة فقط)
-            smtp_host = "smtp-relay.brevo.com"
-            smtp_port = 587
-            smtp_user = "a527c3001@smtp-brevo.com"  # هذا ثابت ولا يتغير
-            smtp_password = os.getenv("BREVO_API_KEY")  # مفتاح API
-
-            # البريد الذي سيظهر للمستلم (يمكنك تغييره إلى بريدك)
-            from_email = Config.EMAIL_USER  # janahmhashem@gmail.com
-
-            # بناء الروابط
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
 
-            # محتوى HTML
             html_content = f"""
             <html>
             <body dir="rtl">
@@ -45,25 +32,28 @@ class EmailService:
             </html>
             """
 
-            # إنشاء الرسالة
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = f"📄 معاملة جديدة: {transaction_id}"
-            msg['From'] = from_email  # هنا سيظهر بريدك الشخصي
-            msg['To'] = customer_email
-            msg.attach(MIMEText(html_content, 'html'))
+            url = "https://api.brevo.com/v3/smtp/email"
+            headers = {
+                "accept": "application/json",
+                "api-key": os.getenv("RESEND_API_KEY"),  # استخدام نفس المفتاح
+                "content-type": "application/json"
+            }
+            payload = {
+                "sender": {"email": Config.EMAIL_USER, "name": "نظام المعاملات"},
+                "to": [{"email": customer_email, "name": customer_name}],
+                "subject": f"📄 معاملة جديدة: {transaction_id}",
+                "htmlContent": html_content
+            }
 
-            # الاتصال والإرسال (نستخدم بيانات SMTP للمصادقة)
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_password)  # المصادقة ببيانات SMTP
-                server.send_message(msg)
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
 
-            logger.info(f"✅ تم إرسال الإيميل إلى {customer_email} من {from_email}")
-            return True
+            if response.status_code == 201:
+                logger.info(f"✅ تم إرسال الإيميل عبر Brevo إلى {customer_email}")
+                return True
+            else:
+                logger.error(f"❌ فشل Brevo: {response.status_code} - {response.text}")
+                return False
 
-        except smtplib.SMTPAuthenticationError:
-            logger.error("❌ فشل المصادقة: تحقق من مفتاح API")
-            return False
         except Exception as e:
-            logger.error(f"❌ خطأ في SMTP: {e}", exc_info=True)
+            logger.error(f"❌ خطأ غير متوقع: {e}", exc_info=True)
             return False
