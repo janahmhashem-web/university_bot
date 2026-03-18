@@ -520,13 +520,19 @@ def ping():
 
 @app.route('/test-email')
 def test_email():
-    success = EmailService.send_customer_email(
-        Config.EMAIL_USER,
-        "اختبار",
-        "TEST123",
-        f"{Config.WEB_APP_URL}/qr/TEST123"
-    )
-    return "تم الإرسال" if success else "فشل"
+    logger.info("📩 تم استدعاء /test-email")
+    try:
+        success = EmailService.send_customer_email(
+            Config.EMAIL_USER,
+            "اختبار",
+            "TEST123",
+            f"{Config.WEB_APP_URL}/qr/TEST123"
+        )
+        logger.info(f"✅ نتيجة الإرسال: {success}")
+        return "تم الإرسال" if success else "فشل"
+    except Exception as e:
+        logger.error(f"🔥 خطأ في test_email: {e}", exc_info=True)
+        return f"خطأ: {e}", 500
 
 # ------------------ صفحة عرض QR كبيرة ------------------
 @app.route('/qr/<id>')
