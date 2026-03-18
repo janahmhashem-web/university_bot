@@ -1,5 +1,5 @@
 import os
-import resend
+import requests
 import logging
 from config import Config
 
@@ -8,20 +8,12 @@ logger = logging.getLogger(__name__)
 class EmailService:
     @staticmethod
     def send_customer_email(customer_email, customer_name, transaction_id, qr_page_url):
-        """
-        إرسال إيميل عبر Resend API.
-        بعد توثيق النطاق (مثل universitybot-production.up.railway.app)،
-        يمكن الإرسال إلى أي بريد إلكتروني.
-        """
         try:
             if not customer_email:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            # تهيئة Resend بالمفتاح
-            resend.api_key = os.getenv("RESEND_API_KEY")
-
-            logger.info(f"📧 محاولة إرسال إيميل عبر Resend إلى {customer_email}")
+            logger.info(f"📧 محاولة إرسال إيميل عبر Brevo إلى {customer_email}")
 
             # بناء الروابط
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
@@ -42,24 +34,31 @@ class EmailService:
             </html>
             """
 
-            # استخدام النطاق الموثق الخاص بك
-            # بعد توثيق النطاق، استخدم بريداً على هذا النطاق (مثل noreply@universitybot-production.up.railway.app)
-            from_email = f"نظام المعاملات <noreply@{Config.WEB_APP_URL.replace('https://', '')}>"
-
-            # إرسال الإيميل
-            params = {
-                "from": from_email,
-                "to": [customer_email],
+            # إعداد API Brevo
+            url = "https://api.brevo.com/v3/smtp/email"
+            headers = {
+                "accept": "application/json",
+                "api-key": os.getenv("BREVO_API_KEY"),
+                "content-type": "application/json"
+            }
+            payload = {
+                "sender": {"email": Config.EMAIL_USER, "name": "نظام المعاملات"},
+                "to": [{"email": customer_email, "name": customer_name}],
                 "subject": f"📄 معاملة جديدة: {transaction_id}",
-                "html": html_content,
+                "htmlContent": html_content
             }
 
-            response = resend.Emails.send(params)
-            logger.info(f"✅ تم إرسال الإيميل عبر Resend إلى {customer_email} (ID: {response['id']})")
-            return True
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
 
-        except resend.exceptions.ResendError as e:
-            logger.error(f"❌ خطأ Resend: {e}")
+            if response.status_code == 201:
+                logger.info(f"✅ تم إرسال الإيميل عبر Brevo إلى {customer_email}")
+                return True
+            else:
+                logger.error(f"❌ فشل Brevo: {response.status_code} - {response.text}")
+                return False
+
+        except requests.exceptions.Timeout:
+            logger.error("❌ مهلة الاتصال انتهت")
             return False
         except Exception as e:
             logger.error(f"❌ خطأ غير متوقع: {e}", exc_info=True)
