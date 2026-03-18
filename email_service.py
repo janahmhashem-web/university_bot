@@ -13,11 +13,11 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            logger.info(f"📧 محاولة إرسال إيميل عبر Brevo API إلى {customer_email}")
+            logger.info(f"📧 محاولة إرسال إيميل عبر MailerLite إلى {customer_email}")
 
+            # بناء المحتوى
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
-
             html_content = f"""
             <html>
             <body dir="rtl">
@@ -32,26 +32,26 @@ class EmailService:
             </html>
             """
 
-            url = "https://api.brevo.com/v3/smtp/email"
+            # إعداد API MailerLite
+            url = "https://connect.mailerlite.com/api/emails"
             headers = {
-                "accept": "application/json",
-                "api-key": os.getenv("RESEND_API_KEY"),  # استخدام نفس المفتاح
-                "content-type": "application/json"
+                "Authorization": f"Bearer {os.getenv('MAILERLITE_API_KEY')}",
+                "Content-Type": "application/json"
             }
             payload = {
-                "sender": {"email": Config.EMAIL_USER, "name": "نظام المعاملات"},
-                "to": [{"email": customer_email, "name": customer_name}],
+                "from": Config.EMAIL_USER,
+                "to": customer_email,
                 "subject": f"📄 معاملة جديدة: {transaction_id}",
-                "htmlContent": html_content
+                "html": html_content
             }
 
             response = requests.post(url, json=payload, headers=headers, timeout=10)
-
-            if response.status_code == 201:
-                logger.info(f"✅ تم إرسال الإيميل عبر Brevo إلى {customer_email}")
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"✅ تم إرسال الإيميل عبر MailerLite إلى {customer_email}")
                 return True
             else:
-                logger.error(f"❌ فشل Brevo: {response.status_code} - {response.text}")
+                logger.error(f"❌ فشل MailerLite: {response.status_code} - {response.text}")
                 return False
 
         except Exception as e:
