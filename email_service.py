@@ -1,6 +1,7 @@
 import os
-import requests
 import logging
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -13,13 +14,11 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            logger.info(f"📧 محاولة إرسال إيميل عبر Sender إلى {customer_email}")
+            logger.info(f"📧 محاولة إرسال إيميل عبر SendGrid إلى {customer_email}")
 
-            # بناء الروابط
+            # بناء المحتوى
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
-
-            # محتوى HTML للإيميل
             html_content = f"""
             <html>
             <body dir="rtl">
@@ -34,32 +33,23 @@ class EmailService:
             </html>
             """
 
-            # إعداد API Sender
-            url = "https://api.sender.net/v2/emails"
-            headers = {
-                "Authorization": f"Bearer {os.getenv('SENDER_API_KEY')}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "from": Config.EMAIL_USER,
-                "to": customer_email,
-                "subject": f"📄 معاملة جديدة: {transaction_id}",
-                "html": html_content
-            }
+            message = Mail(
+                from_email=Config.EMAIL_USER,
+                to_emails=customer_email,
+                subject=f"📄 معاملة جديدة: {transaction_id}",
+                html_content=html_content
+            )
 
-            # إرسال الطلب
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            sg = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
+            response = sg.send(message)
 
             if response.status_code in [200, 201, 202]:
-                logger.info(f"✅ تم إرسال الإيميل عبر Sender إلى {customer_email}")
+                logger.info(f"✅ تم إرسال الإيميل عبر SendGrid إلى {customer_email}")
                 return True
             else:
-                logger.error(f"❌ فشل Sender: {response.status_code} - {response.text}")
+                logger.error(f"❌ فشل SendGrid: {response.status_code} - {response.body}")
                 return False
 
-        except requests.exceptions.Timeout:
-            logger.error("❌ مهلة الاتصال انتهت")
-            return False
         except Exception as e:
-            logger.error(f"❌ خطأ غير متوقع: {e}", exc_info=True)
+            logger.error(f"❌ خطأ في الإيميل: {e}", exc_info=True)
             return False
