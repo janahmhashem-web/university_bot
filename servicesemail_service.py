@@ -9,26 +9,27 @@ logger = logging.getLogger(__name__)
 class EmailService:
     @staticmethod
     def send_customer_email(customer_email, customer_name, transaction_id, qr_page_url):
+        """إرسال بريد إلكتروني للعميل عبر Brevo SMTP"""
         try:
             if not customer_email:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            # إعدادات Brevo
             smtp_server = "smtp-relay.brevo.com"
             smtp_port = 587
-            smtp_username = "janahmhashem@gmail.com"   # بريدك المسجل في Brevo
-            smtp_password = os.getenv("BREVO_SMTP_KEY")  # ⬅️ هذا هو المتغير البيئي الصحيح
+            smtp_username = os.getenv("EMAIL_USER", "janahmhashem@gmail.com")
+            smtp_password = os.getenv("BREVO_SMTP_KEY")
 
             if not smtp_password:
-                logger.error("❌ BREVO_SMTP_KEY غير مضبوط في متغيرات البيئة!")
+                logger.error("❌ BREVO_SMTP_KEY غير مضبوط في المتغيرات البيئية")
                 return False
 
-            from_email = "janahmhashem@gmail.com"   # المرسل الموثق
+            from_email = smtp_username
 
-            # بناء محتوى البريد
-            bot_link = f"https://t.me/{os.getenv('BOT_USERNAME')}"
+            # بناء الروابط
+            bot_link = f"https://t.me/{os.getenv('BOT_USERNAME', 'mtu_jit_bot')}"
             transaction_link = f"{os.getenv('WEB_APP_URL')}/view/{transaction_id}"
+
             html_content = f"""
             <html>
             <body dir="rtl">
@@ -58,5 +59,5 @@ class EmailService:
             return True
 
         except Exception as e:
-            logger.error(f"❌ فشل الإرسال: {e}", exc_info=True)
+            logger.error(f"❌ فشل إرسال الإيميل: {e}", exc_info=True)
             return False
