@@ -1,8 +1,8 @@
+import smtplib
 import os
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import logging
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
-from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -14,11 +14,21 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            logger.info(f"📧 محاولة إرسال إيميل عبر SendGrid إلى {customer_email}")
+            # إعدادات Brevo
+            smtp_server = "smtp-relay.brevo.com"
+            smtp_port = 587
+            smtp_username = "janahmhashem@gmail.com"   # بريدك المسجل في Brevo
+            smtp_password = os.getenv("BREVO_SMTP_KEY")  # ⬅️ هذا هو المتغير البيئي الصحيح
 
-            # بناء المحتوى
-            bot_link = f"https://t.me/{Config.BOT_USERNAME}"
-            transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+            if not smtp_password:
+                logger.error("❌ BREVO_SMTP_KEY غير مضبوط في متغيرات البيئة!")
+                return False
+
+            from_email = "janahmhashem@gmail.com"   # المرسل الموثق
+
+            # بناء محتوى البريد
+            bot_link = f"https://t.me/{os.getenv('BOT_USERNAME')}"
+            transaction_link = f"{os.getenv('WEB_APP_URL')}/view/{transaction_id}"
             html_content = f"""
             <html>
             <body dir="rtl">
@@ -26,30 +36,27 @@ class EmailService:
                 <p>تم إنشاء معاملة جديدة برقم: <strong>{transaction_id}</strong></p>
                 <p>لعرض تفاصيل المعاملة: <a href="{transaction_link}">اضغط هنا</a></p>
                 <p>لعرض رمز QR: <a href="{qr_page_url}">اضغط هنا</a></p>
-                <p>لمتابعة المعاملة عبر البوت: <a href="{bot_link}">@{Config.BOT_USERNAME}</a></p>
+                <p>لمتابعة المعاملة عبر البوت: <a href="{bot_link}">@{os.getenv('BOT_USERNAME')}</a></p>
                 <p>مع الشكر،</p>
                 <p>فريق النظام</p>
             </body>
             </html>
             """
 
-            message = Mail(
-                from_email=Config.EMAIL_USER,
-                to_emails=customer_email,
-                subject=f"📄 معاملة جديدة: {transaction_id}",
-                html_content=html_content
-            )
+            msg = MIMEMultipart()
+            msg['From'] = from_email
+            msg['To'] = customer_email
+            msg['Subject'] = f"📄 معاملة جديدة: {transaction_id}"
+            msg.attach(MIMEText(html_content, 'html'))
 
-            sg = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
-            response = sg.send(message)
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(smtp_username, smtp_password)
+                server.send_message(msg)
 
-            if response.status_code in [200, 201, 202]:
-                logger.info(f"✅ تم إرسال الإيميل عبر SendGrid إلى {customer_email}")
-                return True
-            else:
-                logger.error(f"❌ فشل SendGrid: {response.status_code} - {response.body}")
-                return False
+            logger.info(f"✅ تم إرسال الإيميل إلى {customer_email}")
+            return True
 
         except Exception as e:
-            logger.error(f"❌ خطأ في الإيميل: {e}", exc_info=True)
+            logger.error(f"❌ فشل الإرسال: {e}", exc_info=True)
             return False

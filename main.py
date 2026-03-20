@@ -916,3 +916,19 @@ def view_transaction_page(id):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
+    from services.email_service import EmailService
+from flask import Flask
+
+app = Flask(__name__)
+
+# ... باقي كود التطبيق ...
+
+@app.route('/test-email')
+def test_email():
+    result = EmailService.send_customer_email(
+        customer_email='test@mailinator.com',  # بريد تجريبي
+        customer_name='اختبار',
+        transaction_id='TEST123',
+        qr_page_url='https://example.com'
+    )
+    return '✅ تم الإرسال' if result else '❌ فشل'
