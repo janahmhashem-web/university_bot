@@ -14,17 +14,16 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            # إعدادات SMTP من Brevo
-            smtp_server = Config.EMAIL_HOST      # smtp-relay.brevo.com
-            smtp_port = Config.EMAIL_PORT        # 587
-            smtp_username = Config.EMAIL_USER    # janahmhashem@gmail.com
-            smtp_password = Config.EMAIL_PASSWORD  # المفتاح الجديد xsmtpsib-...
+            smtp_server = Config.EMAIL_HOST
+            smtp_port = Config.EMAIL_PORT
+            smtp_username = Config.EMAIL_USER
+            smtp_password = Config.EMAIL_PASSWORD
 
             if not smtp_password:
-                logger.error("❌ EMAIL_PASSWORD غير مضبوط في الإعدادات")
+                logger.error("❌ SMTP key غير مضبوط في الإعدادات")
                 return False
 
-            # بناء الروابط
+            from_email = smtp_username
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
 
@@ -43,12 +42,11 @@ class EmailService:
             """
 
             msg = MIMEMultipart()
-            msg['From'] = smtp_username
+            msg['From'] = from_email
             msg['To'] = customer_email
             msg['Subject'] = f"📄 معاملة جديدة: {transaction_id}"
             msg.attach(MIMEText(html_content, 'html'))
 
-            # الاتصال وإرسال البريد
             with smtplib.SMTP(smtp_server, smtp_port) as server:
                 server.starttls()
                 server.login(smtp_username, smtp_password)
