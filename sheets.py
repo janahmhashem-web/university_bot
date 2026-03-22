@@ -17,11 +17,11 @@ class GoogleSheetsClient:
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
 
-            spreadsheet_name = os.getenv("SPREADSHEET_NAME")
-            if not spreadsheet_name:
-                raise ValueError("❌ SPREADSHEET_NAME غير موجود")
-            self.spreadsheet = self.client.open(spreadsheet_name)
-            logger.info(f"✅ تم الاتصال بـ Google Sheets: {spreadsheet_name}")
+            spreadsheet_id = os.getenv("SPREADSHEET_ID")
+            if not spreadsheet_id:
+                raise ValueError("❌ SPREADSHEET_ID غير موجود")
+            self.spreadsheet = self.client.open_by_key(spreadsheet_id)
+            logger.info(f"✅ تم الاتصال بـ Google Sheets (ID: {spreadsheet_id})")
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise

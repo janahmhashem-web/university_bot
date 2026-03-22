@@ -14,14 +14,13 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            # إعدادات Brevo SMTP
-            smtp_server = "smtp-relay.brevo.com"
-            smtp_port = 587
+            smtp_server = Config.EMAIL_HOST
+            smtp_port = Config.EMAIL_PORT
             smtp_username = Config.EMAIL_USER
             smtp_password = Config.EMAIL_PASSWORD
 
             if not smtp_password:
-                logger.error("❌ EMAIL_PASSWORD غير مضبوط في الإعدادات")
+                logger.error("❌ BREVO_API_KEY غير مضبوط في الإعدادات")
                 return False
 
             from_email = smtp_username
