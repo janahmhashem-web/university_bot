@@ -10,7 +10,7 @@ class Config:
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
 
-    # إعدادات Gmail SMTP
+    # Gmail SMTP
     EMAIL_USER = os.getenv('EMAIL_USER')
     EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
 

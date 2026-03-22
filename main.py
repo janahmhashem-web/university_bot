@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import os
-os.environ['GUNICORN_TIMEOUT'] = '300'
+os.environ['GUNICORN_TIMEOUT'] = '600'   # <-- هذه السطر الجديد
 
 import logging
 import sys
@@ -581,7 +581,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                     </tr>
+                      </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>

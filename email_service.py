@@ -1,7 +1,8 @@
 import smtplib
+import socket
+import logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import logging
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,6 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            # استخدام SSL مباشرة على المنفذ 465
             smtp_server = "smtp.gmail.com"
             smtp_port = 465
             smtp_username = Config.EMAIL_USER
@@ -48,14 +48,20 @@ class EmailService:
             msg['Subject'] = f"📄 معاملة جديدة: {transaction_id}"
             msg.attach(MIMEText(html_content, 'html'))
 
-            # اتصال SSL مباشر
-            with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
+            # إعداد مهلة منخفضة لمنع التعليق الطويل
+            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
                 server.login(smtp_username, smtp_password)
                 server.send_message(msg)
 
             logger.info(f"✅ تم إرسال الإيميل إلى {customer_email} عبر Gmail SSL")
             return True
 
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"❌ خطأ في المصادقة مع Gmail: {e}")
+            return False
+        except (socket.timeout, socket.error) as e:
+            logger.error(f"❌ مهلة الاتصال أو خطأ في الشبكة: {e}")
+            return False
         except Exception as e:
             logger.error(f"❌ فشل إرسال الإيميل: {e}", exc_info=True)
             return False
