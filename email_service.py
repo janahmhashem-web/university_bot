@@ -1,7 +1,5 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import logging
+import requests
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -14,16 +12,13 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            smtp_server = Config.EMAIL_HOST
-            smtp_port = Config.EMAIL_PORT
-            smtp_username = Config.EMAIL_USER
-            smtp_password = Config.EMAIL_PASSWORD
-
-            if not smtp_password:
-                logger.error("❌ كلمة مرور SMTP غير مضبوطة")
+            api_key = Config.BREVO_API_KEY
+            if not api_key:
+                logger.error("❌ BREVO_API_KEY غير مضبوط")
                 return False
 
-            from_email = smtp_username
+            from_email = Config.BREVO_FROM_EMAIL
+            from_name = Config.BREVO_FROM_NAME or "نظام المعاملات"
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
 
@@ -41,20 +36,32 @@ class EmailService:
             </html>
             """
 
-            msg = MIMEMultipart()
-            msg['From'] = from_email
-            msg['To'] = customer_email
-            msg['Subject'] = f"📄 معاملة جديدة: {transaction_id}"
-            msg.attach(MIMEText(html_content, 'html'))
+            payload = {
+                "sender": {"name": from_name, "email": from_email},
+                "to": [{"email": customer_email, "name": customer_name or "عميل"}],
+                "subject": f"📄 معاملة جديدة: {transaction_id}",
+                "htmlContent": html_content
+            }
 
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(smtp_username, smtp_password)
-                server.send_message(msg)
+            headers = {
+                "api-key": api_key,
+                "Content-Type": "application/json"
+            }
 
-            logger.info(f"✅ تم إرسال الإيميل إلى {customer_email} عبر Gmail SMTP")
-            return True
+            response = requests.post(
+                "https://api.brevo.com/v3/smtp/email",
+                json=payload,
+                headers=headers,
+                timeout=30
+            )
+
+            if response.status_code in (200, 201):
+                logger.info(f"✅ تم إرسال الإيميل إلى {customer_email} عبر Brevo API")
+                return True
+            else:
+                logger.error(f"❌ فشل إرسال الإيميل عبر Brevo API: {response.status_code} - {response.text}")
+                return False
 
         except Exception as e:
-            logger.error(f"❌ فشل إرسال الإيميل: {e}", exc_info=True)
+            logger.error(f"❌ خطأ في إرسال الإيميل: {e}", exc_info=True)
             return False
