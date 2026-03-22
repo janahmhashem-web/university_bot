@@ -320,6 +320,8 @@ def process_transaction(transaction_data):
         # إرسال الإيميل
         customer_email = new_row.get('البريد الإلكتروني')
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
+        logger.info(f"📧 قراءة البريد من الشيت: '{customer_email}' للمعاملة {transaction_id}")
+
         if transaction_id and customer_email:
             qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
             success = EmailService.send_customer_email(
@@ -365,7 +367,6 @@ def check_new_transactions():
                 row_number = i + 2
                 new_row = records[i]
                 transaction_id = new_row.get('ID')
-                # نضيف المعالجة إلى قائمة المهام
                 tasks.append((ws, row_number, new_row, transaction_id))
 
             # تنفيذ المهام بشكل متوازي
@@ -574,13 +575,13 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                    <tr>
+                     <tr>
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                    </tr>
+                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
