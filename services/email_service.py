@@ -17,23 +17,19 @@ class EmailService:
                 logger.error("❌ RESEND_API_KEY غير مضبوط")
                 return False
 
-            from_email = os.getenv("EMAIL_USER", "onboarding@resend.dev")  # بريد Resend الافتراضي
-            # ملاحظة: onboarding@resend.dev يعمل فوراً بدون توثيق للاختبار
-            
+            from_email = "onboarding@resend.dev"  # يعمل فوراً، يمكن تغييره لاحقاً
             bot_link = f"https://t.me/{os.getenv('BOT_USERNAME', 'mtu_jit_bot')}"
             transaction_link = f"{os.getenv('WEB_APP_URL')}/view/{transaction_id}"
 
             html_content = f"""
-            <html>
-            <body dir="rtl">
+            <html><body dir="rtl">
                 <p>مرحباً {customer_name}،</p>
                 <p>تم إنشاء معاملة جديدة برقم: <strong>{transaction_id}</strong></p>
                 <p>لعرض التفاصيل: <a href="{transaction_link}">اضغط هنا</a></p>
                 <p>لمتابعة المعاملة عبر البوت: <a href="{bot_link}">@{os.getenv('BOT_USERNAME')}</a></p>
                 <p>مع الشكر،</p>
                 <p>فريق النظام</p>
-            </body>
-            </html>
+            </body></html>
             """
 
             response = requests.post(
