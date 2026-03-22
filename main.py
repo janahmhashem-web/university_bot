@@ -518,7 +518,7 @@ def test_email():
     logger.info("📩 تم استدعاء /test-email")
     try:
         success = EmailService.send_customer_email(
-            Config.EMAIL_USER,
+            Config.BREVO_FROM_EMAIL,   # استخدم BREVO_FROM_EMAIL بدلاً من EMAIL_USER
             "اختبار",
             "TEST123",
             f"{Config.WEB_APP_URL}/qr/TEST123"
@@ -575,13 +575,13 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                     <tr>
+                    <tr>
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                     </tr>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -597,7 +597,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });
