@@ -1,7 +1,10 @@
 #!/usr/bin/env python
+import os
+# إضافة سطر لتحديد مهلة Gunicorn (لحل WORKER TIMEOUT)
+os.environ['GUNICORN_TIMEOUT'] = '300'
+
 import logging
 import sys
-import os
 import json
 import asyncio
 import threading
@@ -270,8 +273,11 @@ def set_webhook_sync():
 if Config.WEB_APP_URL and bot_app:
     def delayed_webhook():
         time.sleep(5)
-        set_webhook_sync()
-    threading.Thread(target=delayed_webhook).start()
+        try:
+            set_webhook_sync()
+        except Exception as e:
+            logger.error(f"خطأ في خيط webhook: {e}")
+    threading.Thread(target=delayed_webhook, daemon=True).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
 # ------------------ مراقبة المعاملات الجديدة ------------------
@@ -916,19 +922,3 @@ def view_transaction_page(id):
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
-    from services.email_service import EmailService
-from flask import Flask
-
-app = Flask(__name__)
-
-# ... باقي كود التطبيق ...
-
-@app.route('/test-email')
-def test_email():
-    result = EmailService.send_customer_email(
-        customer_email='test@mailinator.com',  # بريد تجريبي
-        customer_name='اختبار',
-        transaction_id='TEST123',
-        qr_page_url='https://example.com'
-    )
-    return '✅ تم الإرسال' if result else '❌ فشل'
