@@ -10,13 +10,13 @@ class Config:
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
 
-    # إعدادات البريد (Brevo SMTP)
-    EMAIL_HOST = "smtp-relay.brevo.com"
-    EMAIL_PORT = 587
-    EMAIL_USER = os.getenv('BREVO_FROM_EMAIL', os.getenv('EMAIL_USER'))
-    EMAIL_PASSWORD = os.getenv('BREVO_API_KEY')   # مفتاح Brevo نفسه
+    # إعدادات SMTP (Brevo)
+    EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp-relay.brevo.com')
+    EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+    EMAIL_USER = os.getenv('EMAIL_USER', os.getenv('BREVO_FROM_EMAIL'))
+    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', os.getenv('BREVO_SMTP_KEY'))
 
-    # أسماء الأوراق في Google Sheets
+    # أسماء الأوراق
     SHEET_MANAGER = "manager"
     SHEET_QR = "QR"
     SHEET_ARCHIVE = "Archive"
