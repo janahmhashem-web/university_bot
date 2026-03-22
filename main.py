@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import os
-# إضافة سطر لتحديد مهلة Gunicorn (لحل WORKER TIMEOUT)
 os.environ['GUNICORN_TIMEOUT'] = '300'
 
 import logging
@@ -11,6 +10,7 @@ import threading
 import time
 import random
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from flask import Flask, request, jsonify, render_template_string, Response
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -280,112 +280,100 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook, daemon=True).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة ------------------
+# ------------------ مراقبة المعاملات الجديدة (نسخة محسنة للسرعة) ------------------
 last_row_count = 0
+executor = ThreadPoolExecutor(max_workers=10)  # معالجة متوازية لـ 10 معاملات
+
+def process_transaction(transaction_data):
+    """معالجة معاملة واحدة في خيط منفصل (تحديث Google Sheets + إرسال إيميل)"""
+    try:
+        ws, row_number, new_row, transaction_id = transaction_data
+        # توليد ID إذا لزم
+        if not transaction_id:
+            now = datetime.now()
+            date_str = now.strftime("%Y%m%d%H%M%S")
+            random_part = random.randint(1000, 9999)
+            transaction_id = f"MUT-{date_str}-{random_part}"
+            ws.update_cell(row_number, 8, transaction_id)
+            logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
+
+        # رابط العرض
+        view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+        hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
+        ws.update_cell(row_number, 21, hyperlink_formula)
+
+        # إدراج في شيت QR
+        qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
+        if qr_ws:
+            name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
+            email = new_row.get('البريد الإلكتروني', '')
+            qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
+            qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
+
+            qr_ws.append_row([name, email, transaction_id, view_link, qr_image_url, qr_page_link])
+            new_row_num = len(qr_ws.get_all_values())
+            qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
+            qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
+            qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
+            logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
+
+        # إرسال الإيميل
+        customer_email = new_row.get('البريد الإلكتروني')
+        customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
+        if transaction_id and customer_email:
+            qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
+            success = EmailService.send_customer_email(
+                customer_email, customer_name, transaction_id, qr_page_link
+            )
+            if success:
+                logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
+            else:
+                logger.error(f"❌ فشل إرسال الإيميل للمعاملة {transaction_id}")
+        else:
+            logger.warning(f"⚠️ لا يمكن إرسال الإيميل: ID={transaction_id}, email={customer_email}")
+
+        # تسجيل التاريخ
+        history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+        if history_ws:
+            history_ws.append_row([
+                datetime.now().isoformat(),
+                transaction_id,
+                "تم إنشاء المعاملة",
+                "النظام"
+            ])
+
+    except Exception as e:
+        logger.error(f"❌ خطأ في معالجة المعاملة: {e}", exc_info=True)
 
 def check_new_transactions():
     global last_row_count
     try:
         if not sheets_client:
-            logger.warning("⏳ sheets_client غير متصل، تخطي الدورة")
             return
 
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
-            logger.error("❌ لا يمكن الوصول إلى ورقة manager")
             return
 
         records = ws.get_all_records()
         current_count = len(records)
-        logger.info(f"📊 عدد السجلات الحالي: {current_count}, آخر عدد معروف: {last_row_count}")
 
         if current_count > last_row_count:
             logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
+            tasks = []
             for i in range(last_row_count, current_count):
                 row_number = i + 2
                 new_row = records[i]
-
-                # التأكد من وجود ID
                 transaction_id = new_row.get('ID')
-                if not transaction_id:
-                    now = datetime.now()
-                    date_str = now.strftime("%Y%m%d%H%M%S")
-                    random_part = random.randint(1000, 9999)
-                    transaction_id = f"MUT-{date_str}-{random_part}"
-                    try:
-                        ws.update_cell(row_number, 8, transaction_id)
-                        logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
-                    except Exception as e:
-                        logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
-                        continue
+                # نضيف المعالجة إلى قائمة المهام
+                tasks.append((ws, row_number, new_row, transaction_id))
 
-                # كتابة رابط العرض في العمود U
-                view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
-                hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
-                try:
-                    ws.update_cell(row_number, 21, hyperlink_formula)
-                    logger.info(f"🔗 تم كتابة رابط العرض في العمود U للصف {row_number}")
-                except Exception as e:
-                    logger.error(f"❌ فشل كتابة الرابط للصف {row_number}: {e}")
-
-                # إدراج صف في شيت QR مع رابط صورة حقيقي
-                qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
-                if qr_ws:
-                    name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
-                    email = new_row.get('البريد الإلكتروني', '')
-                    qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                    qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
-
-                    qr_ws.append_row([
-                        name,
-                        email,
-                        transaction_id,
-                        view_link,
-                        qr_image_url,
-                        qr_page_link
-                    ])
-                    new_row_num = len(qr_ws.get_all_values())
-                    qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
-                    qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
-                    logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
-
-                # إرسال الإيميل
-                customer_email = new_row.get('البريد الإلكتروني')
-                customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
-                logger.info(f"📧 قراءة البريد من الشيت: '{customer_email}' للمعاملة {transaction_id}")
-                if transaction_id and customer_email:
-                    try:
-                        qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                        success = EmailService.send_customer_email(
-                            customer_email,
-                            customer_name,
-                            transaction_id,
-                            qr_page_link
-                        )
-                        if success:
-                            logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
-                        else:
-                            logger.error(f"❌ فشل إرسال الإيميل للمعاملة {transaction_id}")
-                    except Exception as e:
-                        logger.error(f"❌ استثناء أثناء إرسال الإيميل: {e}")
-                else:
-                    logger.warning(f"⚠️ لا يمكن إرسال الإيميل: ID={transaction_id}, email={customer_email}")
-
-                # تسجيل في TransactionHistory
-                history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-                if history_ws:
-                    try:
-                        history_ws.append_row([
-                            datetime.now().isoformat(),
-                            transaction_id,
-                            "تم إنشاء المعاملة",
-                            "النظام"
-                        ])
-                    except Exception as e:
-                        logger.error(f"❌ فشل تسجيل التاريخ: {e}")
+            # تنفيذ المهام بشكل متوازي
+            for task in tasks:
+                executor.submit(process_transaction, task)
 
             last_row_count = current_count
+            logger.info(f"✅ تم تفويض {len(tasks)} معاملات للمعالجة المتوازية")
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
@@ -401,11 +389,11 @@ if sheets_client:
     scheduler.start()
     scheduler.add_job(
         func=check_new_transactions,
-        trigger=IntervalTrigger(seconds=10),
+        trigger=IntervalTrigger(seconds=5),  # فحص كل 5 ثوانٍ لسرعة أكبر
         id='check_transactions',
         replace_existing=True
     )
-    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 10 ثوانٍ)")
+    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 5 ثوانٍ)")
     atexit.register(lambda: scheduler.shutdown())
 
 # ------------------ نقاط نهاية API ------------------
