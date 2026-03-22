@@ -1,8 +1,5 @@
-import smtplib
-import socket
 import logging
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -15,16 +12,13 @@ class EmailService:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
-            smtp_server = "smtp.gmail.com"
-            smtp_port = 465
-            smtp_username = Config.EMAIL_USER
-            smtp_password = Config.EMAIL_PASSWORD
-
-            if not smtp_password:
-                logger.error("❌ كلمة مرور SMTP غير مضبوطة")
+            api_key = Config.RESEND_API_KEY
+            if not api_key:
+                logger.error("❌ RESEND_API_KEY غير مضبوط")
                 return False
 
-            from_email = smtp_username
+            from_email = Config.RESEND_FROM_EMAIL
+            from_name = Config.RESEND_FROM_NAME
             bot_link = f"https://t.me/{Config.BOT_USERNAME}"
             transaction_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
 
@@ -42,26 +36,28 @@ class EmailService:
             </html>
             """
 
-            msg = MIMEMultipart()
-            msg['From'] = from_email
-            msg['To'] = customer_email
-            msg['Subject'] = f"📄 معاملة جديدة: {transaction_id}"
-            msg.attach(MIMEText(html_content, 'html'))
+            # استخدام Resend API
+            url = "https://api.resend.com/emails"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "from": f"{from_name} <{from_email}>",
+                "to": [customer_email],
+                "subject": f"📄 معاملة جديدة: {transaction_id}",
+                "html": html_content
+            }
 
-            # إعداد مهلة منخفضة لمنع التعليق الطويل
-            with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-                server.login(smtp_username, smtp_password)
-                server.send_message(msg)
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
 
-            logger.info(f"✅ تم إرسال الإيميل إلى {customer_email} عبر Gmail SSL")
-            return True
+            if response.status_code == 200:
+                logger.info(f"✅ تم إرسال الإيميل إلى {customer_email} عبر Resend")
+                return True
+            else:
+                logger.error(f"❌ فشل إرسال الإيميل عبر Resend: {response.status_code} - {response.text}")
+                return False
 
-        except smtplib.SMTPAuthenticationError as e:
-            logger.error(f"❌ خطأ في المصادقة مع Gmail: {e}")
-            return False
-        except (socket.timeout, socket.error) as e:
-            logger.error(f"❌ مهلة الاتصال أو خطأ في الشبكة: {e}")
-            return False
         except Exception as e:
-            logger.error(f"❌ فشل إرسال الإيميل: {e}", exc_info=True)
+            logger.error(f"❌ خطأ في إرسال الإيميل: {e}", exc_info=True)
             return False
