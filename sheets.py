@@ -12,13 +12,16 @@ class GoogleSheetsClient:
             scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
             creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
             if not creds_json:
-                raise ValueError("GOOGLE_CREDENTIALS_JSON not set")
+                raise ValueError("❌ GOOGLE_CREDENTIALS_JSON غير موجود")
             creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
-            # غيّر 'اسم_جدولك' إلى الاسم الفعلي للجدول
-            self.spreadsheet = self.client.open('اسم_جدولك')
-            logger.info("✅ تم الاتصال بـ Google Sheets")
+
+            spreadsheet_name = os.getenv("SPREADSHEET_NAME")
+            if not spreadsheet_name:
+                raise ValueError("❌ SPREADSHEET_NAME غير موجود")
+            self.spreadsheet = self.client.open(spreadsheet_name)
+            logger.info(f"✅ تم الاتصال بـ Google Sheets: {spreadsheet_name}")
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
