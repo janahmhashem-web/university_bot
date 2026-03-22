@@ -1,19 +1,23 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 class Config:
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-    BOT_USERNAME = os.getenv('BOT_USERNAME')
-    ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', '0'))
-    SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
-    WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
-    EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
-    EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
-    EMAIL_USER = os.getenv('EMAIL_USER')
-    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
-    SHEET_MANAGER = "manager"
-    SHEET_QR = "QR"
-    SHEET_ARCHIVE = "Archive"
-    SHEET_HISTORY = "TransactionHistory"
+    # Telegram
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    BOT_USERNAME = os.getenv("BOT_USERNAME", "mtu_jit_bot")
+    ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+
+    # Web App URL (يستخدم للويب هوك)
+    WEB_APP_URL = os.getenv("WEB_APP_URL", "https://universitybot-production.up.railway.app")
+
+    # Google Sheets
+    GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+    # Groq AI
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+    # Brevo SMTP
+    BREVO_SMTP_KEY = os.getenv("BREVO_SMTP_KEY")
+    EMAIL_USER = os.getenv("EMAIL_USER", "janahmhashem@gmail.com")
+
+    # Debug mode
+    DEBUG = os.getenv("DEBUG", "False").lower() == "true"

@@ -9,14 +9,13 @@ logger = logging.getLogger(__name__)
 class EmailService:
     @staticmethod
     def send_customer_email(customer_email, customer_name, transaction_id, qr_page_url):
-        """إرسال بريد إلكتروني للعميل عبر Brevo SMTP"""
         try:
             if not customer_email:
                 logger.error("❌ البريد الإلكتروني فارغ!")
                 return False
 
             smtp_server = "smtp-relay.brevo.com"
-            smtp_port = 587
+            smtp_port = 587          # جرب 2525 إذا واجهت مشكلة منفذ
             smtp_username = os.getenv("EMAIL_USER", "janahmhashem@gmail.com")
             smtp_password = os.getenv("BREVO_SMTP_KEY")
 
