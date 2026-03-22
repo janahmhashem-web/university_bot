@@ -17,7 +17,7 @@ class EmailService:
                 logger.error("❌ RESEND_API_KEY غير مضبوط")
                 return False
 
-            from_email = "onboarding@resend.dev"  # يعمل فوراً، يمكن تغييره لاحقاً
+            from_email = "onboarding@resend.dev"  # يعمل فوراً
             bot_link = f"https://t.me/{os.getenv('BOT_USERNAME', 'mtu_jit_bot')}"
             transaction_link = f"{os.getenv('WEB_APP_URL')}/view/{transaction_id}"
 
