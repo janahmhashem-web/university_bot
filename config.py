@@ -10,10 +10,9 @@ class Config:
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
 
-    # Brevo API
-    BREVO_API_KEY = os.getenv('BREVO_API_KEY')
-    BREVO_FROM_EMAIL = os.getenv('BREVO_FROM_EMAIL', os.getenv('EMAIL_USER'))
-    BREVO_FROM_NAME = os.getenv('BREVO_FROM_NAME', 'نظام المعاملات')
+    # إعدادات Gmail SMTP
+    EMAIL_USER = os.getenv('EMAIL_USER')
+    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
 
     SHEET_MANAGER = "manager"
     SHEET_QR = "QR"
