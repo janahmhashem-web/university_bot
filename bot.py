@@ -269,6 +269,16 @@ executor = ThreadPoolExecutor(max_workers=10)
 monitoring_thread = None
 stop_monitoring = threading.Event()
 
+def safe_get_records(ws):
+    """الحصول على السجلات مع مهلة 10 ثوانٍ (تجنب التعليق)"""
+    try:
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            future = ex.submit(ws.get_all_records)
+            return future.result(timeout=10)
+    except Exception as e:
+        logger.error(f"خطأ في جلب السجلات: {e}")
+        return []
+
 def process_transaction(transaction_data):
     try:
         ws, row_number, new_row, transaction_id = transaction_data
@@ -323,7 +333,8 @@ def check_new_transactions():
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
             return
-        records = ws.get_all_records()
+
+        records = safe_get_records(ws)
         current_count = len(records)
 
         if current_count > last_row_count:
@@ -348,7 +359,8 @@ def check_transaction_updates():
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
             return
-        records = ws.get_all_records()
+
+        records = safe_get_records(ws)
         for row in records:
             tx_id = row.get('ID')
             if not tx_id:
@@ -363,7 +375,7 @@ def check_transaction_updates():
                 if old_state != current_state:
                     subs_ws = sheets_client.get_worksheet(Config.SHEET_SUBSCRIBERS)
                     if subs_ws:
-                        subs = subs_ws.get_all_records()
+                        subs = safe_get_records(subs_ws)
                         for sub in subs:
                             if sub.get('transaction_id') == tx_id:
                                 user_id = sub.get('user_id')
@@ -395,7 +407,7 @@ def smart_alerts():
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
             return
-        records = ws.get_all_records()
+        records = safe_get_records(ws)
         for row in records:
             tx_id = row.get('ID')
             delay = row.get('التأخير', '')
@@ -404,7 +416,7 @@ def smart_alerts():
                 msg = f"⚠️ *تنبيه: معاملة {tx_id} متأخرة*\nيرجى مراجعة السبب."
                 subs_ws = sheets_client.get_worksheet(Config.SHEET_SUBSCRIBERS)
                 if subs_ws:
-                    subs = subs_ws.get_all_records()
+                    subs = safe_get_records(subs_ws)
                     for sub in subs:
                         if sub.get('transaction_id') == tx_id:
                             user_id = sub.get('user_id')
@@ -424,7 +436,7 @@ def smart_alerts():
         logger.error(f"خطأ في smart_alerts: {e}")
 
 def monitoring_loop():
-    logger.info("🔄 بدء حلقة المراقبة اليدوية (كل 5 ثوانٍ)")
+    logger.info("🔄 بدء حلقة المراقبة اليدوية (كل 10 ثوانٍ)")
     last_alert_time = time.time()
     while not stop_monitoring.is_set():
         try:
@@ -434,8 +446,8 @@ def monitoring_loop():
                 smart_alerts()
                 last_alert_time = time.time()
         except Exception as e:
-            logger.error(f"خطأ في حلقة المراقبة: {e}")
-        time.sleep(5)
+            logger.error(f"خطأ في حلقة المراقبة: {e}", exc_info=True)
+        time.sleep(10)
     logger.info("🛑 توقفت حلقة المراقبة")
 
 # ------------------ إعداد البوت ------------------
@@ -449,17 +461,19 @@ def set_webhook_sync():
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
     token = Config.TELEGRAM_BOT_TOKEN
     try:
-        # حذف webhook القديم أولاً
-        del_resp = requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
+        del_resp = requests.post(
+            f"https://api.telegram.org/bot{token}/deleteWebhook",
+            timeout=10
+        )
         if del_resp.status_code == 200:
             logger.info("✅ تم حذف webhook القديم")
         else:
             logger.warning(f"⚠️ فشل حذف webhook القديم: {del_resp.text}")
 
-        # تعيين webhook الجديد
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/setWebhook",
-            data={"url": webhook_url}
+            data={"url": webhook_url},
+            timeout=10
         )
         if resp.status_code == 200 and resp.json().get("ok"):
             logger.info(f"✅ Webhook set to {webhook_url}")
@@ -477,6 +491,7 @@ def init_bot():
     try:
         logger.info("📦 بناء تطبيق البوت...")
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+        # إضافة المعالجات
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
@@ -526,15 +541,20 @@ def init_bot():
         # بدء حلقة المراقبة
         if sheets_client:
             try:
-                last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
-                logger.info(f"📋 عدد المعاملات الحالي: {last_row_count}")
+                ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+                if ws:
+                    records = safe_get_records(ws)
+                    last_row_count = len(records)
+                    logger.info(f"📋 عدد المعاملات الحالي: {last_row_count}")
+                else:
+                    logger.warning("⚠️ ورقة manager غير موجودة")
             except Exception as e:
                 logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
                 last_row_count = 0
 
             monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
             monitoring_thread.start()
-            logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات (كل 5 ثوانٍ)")
+            logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات (كل 10 ثوانٍ)")
         else:
             logger.warning("⚠️ sheets_client غير متاح، لن يتم تشغيل المراقبة")
     except Exception as e:
