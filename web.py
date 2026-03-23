@@ -102,13 +102,13 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                    <tr>
+                     <tr>
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                    </tr>
+                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -124,7 +124,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -132,7 +132,8 @@ INDEX_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
-EDIT_HTML = """<!DOCTYPE html>
+EDIT_HTML = """
+<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
     <meta charset="UTF-8">
@@ -330,7 +331,8 @@ EDIT_HTML = """<!DOCTYPE html>
 </html>
 """
 
-VIEW_HTML = """<!DOCTYPE html>
+VIEW_HTML = """
+<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
     <meta charset="UTF-8">
@@ -534,7 +536,7 @@ def api_transaction_history(id):
 def ping():
     return "pong"
 
-# ------------------ صفحة عرض QR كبيرة ------------------
+# ------------------ صفحة عرض QR ------------------
 @app.route('/qr/<id>')
 def qr_page(id):
     view_link = f"{Config.WEB_APP_URL}/view/{id}"
@@ -577,7 +579,7 @@ def edit_transaction_page(id):
 def view_transaction_page(id):
     return render_template_string(VIEW_HTML)
 
-# ------------------ مسار الفورم (للاختبار المباشر) ------------------
+# ------------------ مسار الفورم المباشر ------------------
 @app.route('/new-transaction', methods=['GET', 'POST'])
 def new_transaction():
     if request.method == 'GET':
@@ -623,7 +625,6 @@ def new_transaction():
 # ------------------ استقبال البيانات من Google Form ------------------
 @app.route('/form-submit', methods=['POST'])
 def form_submit():
-    """استقبال بيانات من Google Apps Script"""
     try:
         data = request.json
         now = datetime.now()
@@ -652,7 +653,7 @@ def form_submit():
         logger.error(f"خطأ في form-submit: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# ------------------ صفحة النجاح (تعرض ID وزر البوت) ------------------
+# ------------------ صفحة النجاح ------------------
 @app.route('/transaction-success/<transaction_id>')
 def transaction_success(transaction_id):
     return render_template_string(

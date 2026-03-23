@@ -40,7 +40,7 @@ except Exception as e:
 # ------------------ الذكاء الاصطناعي ------------------
 ai_assistant = AIAssistant()
 
-# ------------------ دوال البوت الأساسية ------------------
+# ------------------ دوال البوت ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -269,7 +269,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, tr
 # ------------------ مراقبة المعاملات الجديدة ------------------
 last_row_count = 0
 last_state = {}
-executor = ThreadPoolExecutor(max_workers=10)  # 10 خيوط متوازية
+executor = ThreadPoolExecutor(max_workers=10)
 
 def process_transaction(transaction_data):
     """معالجة معاملة واحدة في خيط منفصل (بدون إيميل)"""
@@ -312,6 +312,7 @@ def process_transaction(transaction_data):
                 "النظام"
             ])
 
+        # تخزين الحالة الأولية للمعاملة لمراقبة التغييرات
         global last_state
         last_state[transaction_id] = (
             new_row.get('الحالة', ''),

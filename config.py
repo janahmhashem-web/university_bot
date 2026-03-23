@@ -10,7 +10,7 @@ class Config:
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
 
-    # Google Sheets
+    # Sheets
     SHEET_MANAGER = "manager"
     SHEET_QR = "QR"
     SHEET_ARCHIVE = "Archive"
