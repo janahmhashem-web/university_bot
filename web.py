@@ -626,13 +626,11 @@ def form_submit():
     """استقبال بيانات من Google Apps Script"""
     try:
         data = request.json
-        # توليد ID فريد
         now = datetime.now()
         date_str = now.strftime("%Y%m%d%H%M%S")
         random_part = random.randint(1000, 9999)
         transaction_id = f"MUT-{date_str}-{random_part}"
 
-        # حفظ البيانات في Google Sheets
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
             return jsonify({'success': False, 'error': 'Sheets not accessible'}), 500
@@ -643,16 +641,13 @@ def form_submit():
             if col == 'ID':
                 new_row.append(transaction_id)
             else:
-                # مطابقة أسماء الأعمدة مع أسماء الحقول في النموذج
                 value = data.get(col, '')
                 new_row.append(value)
         ws.append_row(new_row)
         logger.info(f"✅ تم إضافة معاملة جديدة من Google Form: {transaction_id}")
 
-        # إرجاع رابط صفحة النجاح
         success_url = f"{Config.WEB_APP_URL}/transaction-success/{transaction_id}"
         return jsonify({'success': True, 'redirect_url': success_url})
-
     except Exception as e:
         logger.error(f"خطأ في form-submit: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -660,7 +655,6 @@ def form_submit():
 # ------------------ صفحة النجاح (تعرض ID وزر البوت) ------------------
 @app.route('/transaction-success/<transaction_id>')
 def transaction_success(transaction_id):
-    """صفحة النجاح التي تعرض ID وزر البوت"""
     return render_template_string(
         SUCCESS_HTML,
         transaction_id=transaction_id,

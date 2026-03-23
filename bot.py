@@ -269,7 +269,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, tr
 # ------------------ مراقبة المعاملات الجديدة ------------------
 last_row_count = 0
 last_state = {}
-executor = ThreadPoolExecutor(max_workers=10)
+executor = ThreadPoolExecutor(max_workers=10)  # 10 خيوط متوازية
 
 def process_transaction(transaction_data):
     """معالجة معاملة واحدة في خيط منفصل (بدون إيميل)"""
@@ -322,6 +322,7 @@ def process_transaction(transaction_data):
         logger.error(f"❌ خطأ في معالجة المعاملة: {e}", exc_info=True)
 
 def check_new_transactions():
+    """فحص دوري كل 5 ثوانٍ لاكتشاف المعاملات الجديدة وتفويضها للمعالجة المتوازية"""
     global last_row_count
     try:
         if not sheets_client:
@@ -343,11 +344,12 @@ def check_new_transactions():
             for task in tasks:
                 executor.submit(process_transaction, task)
             last_row_count = current_count
-            logger.info(f"✅ تم تفويض {len(tasks)} معاملات للمعالجة المتوازية")
+            logger.info(f"✅ تم تفويض {len(tasks)} معاملات للمعالجة المتوازية (10 خيوط)")
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
 def check_transaction_updates():
+    """مراقبة تغيرات الحالة وإرسال إشعارات فورية للمشتركين (كل 5 ثوانٍ)"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -367,6 +369,7 @@ def check_transaction_updates():
             if tx_id in last_state:
                 old_state = last_state[tx_id]
                 if old_state != current_state:
+                    # إرسال إشعار للمشتركين
                     subs_ws = sheets_client.get_worksheet(Config.SHEET_SUBSCRIBERS)
                     if subs_ws:
                         subs = subs_ws.get_all_records()
@@ -395,6 +398,7 @@ def check_transaction_updates():
         logger.error(f"خطأ في check_transaction_updates: {e}")
 
 def smart_alerts():
+    """تنبيهات دورية للمعاملات المتأخرة (كل ساعة)"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -501,6 +505,7 @@ def init_bot():
         threading.Thread(target=delayed_webhook, daemon=True).start()
         logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
+        # بدء جدولة المهام
         global scheduler, last_row_count, executor
         if sheets_client:
             try:
@@ -511,25 +516,10 @@ def init_bot():
 
             scheduler = BackgroundScheduler()
             scheduler.start()
-            scheduler.add_job(
-                func=check_new_transactions,
-                trigger=IntervalTrigger(seconds=5),
-                id='check_transactions',
-                replace_existing=True
-            )
-            scheduler.add_job(
-                func=check_transaction_updates,
-                trigger=IntervalTrigger(seconds=5),
-                id='check_updates',
-                replace_existing=True
-            )
-            scheduler.add_job(
-                func=smart_alerts,
-                trigger=IntervalTrigger(seconds=3600),
-                id='smart_alerts',
-                replace_existing=True
-            )
-            logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات والتنبيهات")
+            scheduler.add_job(check_new_transactions, IntervalTrigger(seconds=5), id='check_new')
+            scheduler.add_job(check_transaction_updates, IntervalTrigger(seconds=5), id='check_updates')
+            scheduler.add_job(smart_alerts, IntervalTrigger(seconds=3600), id='smart_alerts')
+            logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات والتنبيهات (فحص كل 5 ثوانٍ، معالجة متوازية بـ 10 خيوط)")
             atexit.register(lambda: scheduler.shutdown())
     except Exception as e:
         logger.error(f"❌ فشل إعداد البوت: {e}")
