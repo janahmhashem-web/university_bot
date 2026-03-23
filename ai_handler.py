@@ -3,6 +3,7 @@ import logging
 from config import Config
 from sheets import GoogleSheetsClient
 from openai import OpenAI
+import globals
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +13,8 @@ class AIAssistant:
             api_key=os.getenv('GROQ_API_KEY'),
             base_url="https://api.groq.com/openai/v1"
         )
-        self.sheets = GoogleSheetsClient()
-        logger.info("✅ تم تهيئة Groq AI مع دعم البيانات الكاملة")
+        self.sheets = globals.sheets_client  # سيتم تعيينه بعد التهيئة
+        logger.info("✅ تم تهيئة Groq AI")
 
     async def get_response(self, user_message, user_id, user_name="", transaction_id=None):
         try:
