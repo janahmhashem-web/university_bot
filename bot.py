@@ -449,16 +449,17 @@ def set_webhook_sync():
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
     token = Config.TELEGRAM_BOT_TOKEN
     try:
-        del_resp = requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook", timeout=10)
+        # حذف webhook القديم أولاً
+        del_resp = requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
         if del_resp.status_code == 200:
             logger.info("✅ تم حذف webhook القديم")
         else:
             logger.warning(f"⚠️ فشل حذف webhook القديم: {del_resp.text}")
 
+        # تعيين webhook الجديد
         resp = requests.post(
             f"https://api.telegram.org/bot{token}/setWebhook",
-            data={"url": webhook_url},
-            timeout=10
+            data={"url": webhook_url}
         )
         if resp.status_code == 200 and resp.json().get("ok"):
             logger.info(f"✅ Webhook set to {webhook_url}")
@@ -476,7 +477,6 @@ def init_bot():
     try:
         logger.info("📦 بناء تطبيق البوت...")
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-        # إضافة المعالجات
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
@@ -489,35 +489,23 @@ def init_bot():
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
-        # تهيئة البوت في حلقة غير متزامنة مع مهلة
         async def init_bot_async():
             logger.info("🔄 تهيئة البوت في الحلقة غير المتزامنة...")
-            try:
-                await asyncio.wait_for(bot_app.initialize(), timeout=15)
-                logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
-            except asyncio.TimeoutError:
-                logger.error("❌ انتهت مهلة تهيئة البوت (15 ثانية)")
-                raise
+            await bot_app.initialize()
+            logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
 
         def start_background_loop():
             global background_loop
             background_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(background_loop)
-            try:
-                background_loop.run_until_complete(init_bot_async())
-            except Exception as e:
-                logger.error(f"فشل تشغيل الحلقة الخلفية: {e}")
-                return
+            background_loop.run_until_complete(init_bot_async())
             logger.info("🔄 بدء حلقة الأحداث الخلفية...")
             background_loop.run_forever()
 
         loop_thread = threading.Thread(target=start_background_loop, daemon=True)
         loop_thread.start()
         logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
-        time.sleep(5)  # انتظر قليلاً
-        if not background_loop or not background_loop.is_running():
-            logger.error("❌ الحلقة الخلفية لم تبدأ بشكل صحيح")
-            return
+        time.sleep(3)
         logger.info("✅ خلفية البوت تعمل")
 
         # تعيين webhook
@@ -538,7 +526,6 @@ def init_bot():
         # بدء حلقة المراقبة
         if sheets_client:
             try:
-                logger.info("📊 محاولة قراءة عدد المعاملات الحالي...")
                 last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
                 logger.info(f"📋 عدد المعاملات الحالي: {last_row_count}")
             except Exception as e:
