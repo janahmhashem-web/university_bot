@@ -512,18 +512,29 @@ def init_bot():
         loop_thread = threading.Thread(target=start_background_loop, daemon=True)
         loop_thread.start()
         logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
-        time.sleep(2)
+        time.sleep(3)  # انتظر قليلاً للتأكد من اكتمال التهيئة
         logger.info("✅ خلفية البوت تعمل")
 
-        # تعيين webhook بعد 5 ثوانٍ
-        def delayed_webhook():
-            time.sleep(5)
+        # ========== تعيين webhook ==========
+        # ننتظر قليلاً إضافي لضمان استقرار الخادم
+        time.sleep(2)
+        logger.info("🌐 محاولة تعيين webhook...")
+        success = False
+        for attempt in range(1, 4):
             try:
                 set_webhook_sync()
+                success = True
+                break
             except Exception as e:
-                logger.error(f"خطأ في خيط webhook: {e}")
-        threading.Thread(target=delayed_webhook, daemon=True).start()
-        logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
+                logger.error(f"❌ محاولة {attempt} فشلت في تعيين webhook: {e}")
+                if attempt < 3:
+                    time.sleep(5)
+                else:
+                    logger.error("❌ فشل تعيين webhook بعد 3 محاولات.")
+        if success:
+            logger.info("✅ تم تعيين webhook بنجاح.")
+        else:
+            logger.warning("⚠️ لم يتم تعيين webhook تلقائياً، يمكنك تعيينه يدوياً عبر الرابط.")
 
         # بدء حلقة المراقبة (بديل عن apscheduler)
         if sheets_client:
