@@ -4,7 +4,6 @@ os.environ['GUNICORN_TIMEOUT'] = '600'
 
 import logging
 import sys
-import json
 import asyncio
 import threading
 import time
@@ -19,7 +18,6 @@ import requests
 
 from sheets import GoogleSheetsClient
 from config import Config
-from email_service import EmailService
 from qr_generator import QRGenerator
 from ai_handler import AIAssistant
 from datetime import datetime
@@ -47,18 +45,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
-    msg += "📌 *الأوامر العامة:*\n"
-    msg += "🔹 /id [رقم] - تفاصيل معاملة\n"
-    msg += "🔹 /history [رقم] - سجل تتبع معاملة\n"
-    msg += "🔹 /search [كلمة] - بحث في المعاملات\n"
-    msg += "🔹 /wake - للتأكد من أن البوت يعمل\n"
-    msg += "🔹 /subscribe [رقم] - متابعة معاملة\n"
-    msg += "🔹 /unsubscribe [رقم] - إلغاء متابعة\n"
-    msg += "🔹 /status [رقم] - تحليل ذكي للحالة\n"
-    if is_admin:
-        msg += "\n👑 *أوامر المدير:*\n"
-        msg += "🔹 /stats - إحصائيات عامة\n"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+    
+    if context.args:
+        transaction_id = context.args[0]
+        msg += f"تم استلام معاملتك رقم: *{transaction_id}*\n"
+        msg += f"يمكنك متابعتها عبر الرابط: [عرض التفاصيل]({Config.WEB_APP_URL}/view/{transaction_id})\n\n"
+    else:
+        msg += "📌 *الأوامر العامة:*\n"
+        msg += "🔹 /id [رقم] - تفاصيل معاملة\n"
+        msg += "🔹 /history [رقم] - سجل تتبع معاملة\n"
+        msg += "🔹 /search [كلمة] - بحث في المعاملات\n"
+        msg += "🔹 /wake - للتأكد من أن البوت يعمل\n"
+        msg += "🔹 /subscribe [رقم] - متابعة معاملة\n"
+        msg += "🔹 /unsubscribe [رقم] - إلغاء متابعة\n"
+        msg += "🔹 /status [رقم] - تحليل ذكي للحالة\n"
+        if is_admin:
+            msg += "\n👑 *أوامر المدير:*\n"
+            msg += "🔹 /stats - إحصائيات عامة\n"
+    
+    await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -267,7 +272,7 @@ last_state = {}
 executor = ThreadPoolExecutor(max_workers=10)
 
 def process_transaction(transaction_data):
-    """معالجة معاملة واحدة في خيط منفصل"""
+    """معالجة معاملة واحدة في خيط منفصل (بدون إيميل)"""
     try:
         ws, row_number, new_row, transaction_id = transaction_data
         if not transaction_id:
@@ -296,21 +301,7 @@ def process_transaction(transaction_data):
             qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
             logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
-        customer_email = new_row.get('البريد الإلكتروني')
-        customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
-        logger.info(f"📧 قراءة البريد من الشيت: '{customer_email}' للمعاملة {transaction_id}")
-
-        if transaction_id and customer_email:
-            qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-            success = EmailService.send_customer_email(
-                customer_email, customer_name, transaction_id, qr_page_link
-            )
-            if success:
-                logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
-            else:
-                logger.error(f"❌ فشل إرسال الإيميل للمعاملة {transaction_id}")
-        else:
-            logger.warning(f"⚠️ لا يمكن إرسال الإيميل: ID={transaction_id}, email={customer_email}")
+        # لا إرسال إيميل
 
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         if history_ws:
@@ -321,7 +312,6 @@ def process_transaction(transaction_data):
                 "النظام"
             ])
 
-        # تخزين الحالة الأولية للمعاملة لمراقبة التغييرات
         global last_state
         last_state[transaction_id] = (
             new_row.get('الحالة', ''),
@@ -358,7 +348,6 @@ def check_new_transactions():
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
 def check_transaction_updates():
-    """فحص التغييرات في الحقول الرئيسية وإرسال إشعارات للمشتركين"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -378,7 +367,6 @@ def check_transaction_updates():
             if tx_id in last_state:
                 old_state = last_state[tx_id]
                 if old_state != current_state:
-                    # إرسال إشعار للمشتركين
                     subs_ws = sheets_client.get_worksheet(Config.SHEET_SUBSCRIBERS)
                     if subs_ws:
                         subs = subs_ws.get_all_records()
@@ -407,7 +395,6 @@ def check_transaction_updates():
         logger.error(f"خطأ في check_transaction_updates: {e}")
 
 def smart_alerts():
-    """فحص دوري للمعاملات المتأخرة أو التي تحتاج تنبيه"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -505,7 +492,6 @@ def init_bot():
         logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
         time.sleep(2)
 
-        # تعيين webhook بعد 5 ثوانٍ
         def delayed_webhook():
             time.sleep(5)
             try:
@@ -515,7 +501,6 @@ def init_bot():
         threading.Thread(target=delayed_webhook, daemon=True).start()
         logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-        # بدء جدولة المهام
         global scheduler, last_row_count, executor
         if sheets_client:
             try:

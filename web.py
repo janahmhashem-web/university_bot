@@ -5,181 +5,89 @@ import json
 import asyncio
 import base64
 import os
+import random
+from datetime import datetime
 from telegram import Update
 from sheets import GoogleSheetsClient
 from config import Config
 from qr_generator import QRGenerator
-from email_service import EmailService
-# استيراد المتغيرات العالمية من البوت
 from bot import bot_app, background_loop, sheets_client, ai_assistant
 
 logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
-# ------------------ نقاط نهاية API ------------------
-@app.route('/api/transactions', methods=['GET'])
-def api_transactions():
-    if not sheets_client:
-        return jsonify([])
-    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
-    result = [{
-        'id': r.get('ID', ''),
-        'name': r.get('اسم صاحب المعاملة الثلاثي', ''),
-        'status': r.get('الحالة', ''),
-        'employee': r.get('الموظف المسؤول', '')
-    } for r in records]
-    return jsonify(result)
+# ------------------ قوالب HTML ------------------
+NEW_TRANSACTION_HTML = """
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>طلب معاملة جديدة</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-2xl mx-auto bg-white rounded-xl shadow p-6">
+        <h1 class="text-2xl font-bold mb-6 text-center">📋 تقديم معاملة جديدة</h1>
+        <form method="POST">
+            <div class="mb-4">
+                <label class="block text-gray-700 font-bold mb-2">الاسم الثلاثي</label>
+                <input type="text" name="name" required class="w-full p-2 border rounded-lg">
+            </div>
+            <div class="mb-4">
+                <label class="block text-gray-700 font-bold mb-2">رقم الهاتف</label>
+                <input type="tel" name="phone" required class="w-full p-2 border rounded-lg">
+            </div>
+            <div class="mb-4">
+                <label class="block text-gray-700 font-bold mb-2">القسم</label>
+                <input type="text" name="department" class="w-full p-2 border rounded-lg">
+            </div>
+            <div class="mb-4">
+                <label class="block text-gray-700 font-bold mb-2">نوع المعاملة</label>
+                <input type="text" name="type" class="w-full p-2 border rounded-lg">
+            </div>
+            <div class="mb-4">
+                <label class="block text-gray-700 font-bold mb-2">المرافقات (رابط)</label>
+                <input type="url" name="attachments" class="w-full p-2 border rounded-lg">
+            </div>
+            <button type="submit" class="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700">إرسال الطلب</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
 
-@app.route('/api/transaction/<id>', methods=['GET', 'POST'])
-def api_transaction(id):
-    if not sheets_client:
-        return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
+SUCCESS_HTML = """
+<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تم استلام طلبك</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-2xl mx-auto bg-white rounded-xl shadow p-6 text-center">
+        <h1 class="text-2xl font-bold text-green-600 mb-4">✅ تم استلام طلبك بنجاح</h1>
+        <p class="text-gray-700 mb-2">رقم معاملتك هو:</p>
+        <p class="text-3xl font-mono font-bold text-blue-600 mb-6">{transaction_id}</p>
+        <div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-6 text-right">
+            <p class="font-bold">⚠️ تنبيه هام:</p>
+            <p>يجب عليك <strong>حفظ هذا الرقم</strong> جيداً، لأنه الرابط الوحيد للتواصل مع البوت ومتابعة معاملتك. بدون هذا الرقم لن نتمكن من مساعدتك.</p>
+        </div>
+        <p class="mb-6">اضغط الزر أدناه لفتح البوت والبدء:</p>
+        <a href="https://t.me/{bot_username}?start={transaction_id}" 
+           class="inline-block bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 transition">
+            🚀 فتح البوت
+        </a>
+        <p class="text-sm text-gray-500 mt-6">يمكنك أيضًا تتبع معاملتك عبر الرابط:<br>
+        <a href="{web_app_url}/view/{transaction_id}" class="text-blue-500 underline">{web_app_url}/view/{transaction_id}</a>
+        </p>
+    </div>
+</body>
+</html>
+"""
 
-    if request.method == 'GET':
-        data = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
-        if not data:
-            return jsonify({'error': 'Not found'}), 404
-        return jsonify(data['data'])
-
-    else:
-        updates = request.json
-        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
-        if not row_info:
-            return jsonify({'success': False, 'message': 'المعاملة غير موجودة'})
-        row = row_info['row']
-        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-        headers = ws.row_values(1)
-
-        for key, value in updates.items():
-            if key in headers:
-                col = headers.index(key) + 1
-                ws.update_cell(row, col, value)
-
-        # تحديث الأعمدة الإضافية
-        from datetime import datetime
-        employee_name = updates.get('الموظف المسؤول', 'غير معروف')
-        if 'آخر تعديل بواسطة' in headers:
-            col_v = headers.index('آخر تعديل بواسطة') + 1
-            ws.update_cell(row, col_v, employee_name)
-        else:
-            ws.update_cell(row, 22, employee_name)
-
-        now = datetime.now().isoformat()
-        if 'آخر تعديل بتاريخ' in headers:
-            col_w = headers.index('آخر تعديل بتاريخ') + 1
-            ws.update_cell(row, col_w, now)
-        else:
-            ws.update_cell(row, 23, now)
-
-        try:
-            current_count_cell = ws.cell(row, 24).value
-            current_count = int(current_count_cell) if current_count_cell and str(current_count_cell).isdigit() else 0
-        except:
-            current_count = 0
-        new_count = current_count + 1
-        if 'عدد التعديلات' in headers:
-            col_x = headers.index('عدد التعديلات') + 1
-            ws.update_cell(row, col_x, new_count)
-        else:
-            ws.update_cell(row, 24, new_count)
-
-        # تسجيل التاريخ
-        try:
-            history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-            if history_ws:
-                history_ws.append_row([
-                    datetime.now().isoformat(),
-                    id,
-                    f"تم تحديث الحقول: {', '.join(updates.keys())}",
-                    employee_name
-                ])
-        except Exception as e:
-            logger.error(f"فشل تسجيل التاريخ: {e}")
-
-        # إشعار للمدير
-        if Config.ADMIN_CHAT_ID and background_loop and bot_app:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    bot_app.bot.send_message(
-                        chat_id=Config.ADMIN_CHAT_ID,
-                        text=f"✏️ *تحديث معاملة*\nالمعاملة: {id}\nبواسطة: {employee_name}",
-                        parse_mode='Markdown'
-                    ),
-                    background_loop
-                )
-            except Exception as e:
-                logger.error(f"فشل إرسال إشعار البوت: {e}")
-
-        return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
-
-@app.route('/api/history/<id>')
-def api_transaction_history(id):
-    if not sheets_client:
-        return jsonify([])
-    try:
-        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-        if not ws:
-            return jsonify([])
-        records = ws.get_all_records()
-        history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
-                   for r in records if str(r.get('ID')) == id]
-        history.sort(key=lambda x: x['time'], reverse=True)
-        return jsonify(history)
-    except Exception as e:
-        logger.error(f"خطأ في جلب التاريخ: {e}")
-        return jsonify([])
-
-@app.route('/ping')
-def ping():
-    return "pong"
-
-@app.route('/test-email')
-def test_email():
-    logger.info("📩 تم استدعاء /test-email")
-    try:
-        success = EmailService.send_customer_email(
-            Config.RESEND_FROM_EMAIL,
-            "اختبار",
-            "TEST123",
-            f"{Config.WEB_APP_URL}/qr/TEST123"
-        )
-        logger.info(f"✅ نتيجة الإرسال: {success}")
-        return "تم الإرسال" if success else "فشل"
-    except Exception as e:
-        logger.error(f"🔥 خطأ في test_email: {e}", exc_info=True)
-        return f"خطأ: {e}", 500
-
-# ------------------ صفحة عرض QR كبيرة ------------------
-@app.route('/qr/<id>')
-def qr_page(id):
-    view_link = f"{Config.WEB_APP_URL}/view/{id}"
-    qr_base64 = QRGenerator.generate_qr(view_link)
-    html = f"""
-    <!DOCTYPE html>
-    <html dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <title>QR Code للمعاملة {id}</title>
-        <style>
-            body {{ display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f5f5f5; }}
-            img {{ max-width: 90%; max-height: 90%; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
-        </style>
-    </head>
-    <body>
-        <img src="data:image/png;base64,{qr_base64}" alt="QR Code للمعاملة {id}">
-    </body>
-    </html>
-    """
-    return html
-
-@app.route('/qr_image/<id>')
-def qr_image(id):
-    view_link = f"{Config.WEB_APP_URL}/view/{id}"
-    qr_base64 = QRGenerator.generate_qr(view_link)
-    img_data = base64.b64decode(qr_base64)
-    return Response(img_data, mimetype='image/png')
-
-# ------------------ صفحات HTML ------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
@@ -194,13 +102,13 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                     <tr>
+                    <tr>
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                     </tr>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -216,7 +124,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -419,7 +327,8 @@ EDIT_HTML = """<!DOCTYPE html>
         loadHistory();
     </script>
 </body>
-</html>"""
+</html>
+"""
 
 VIEW_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -509,8 +418,153 @@ VIEW_HTML = """<!DOCTYPE html>
         loadHistory();
     </script>
 </body>
-</html>"""
+</html>
+"""
 
+# ------------------ نقاط نهاية API ------------------
+@app.route('/api/transactions', methods=['GET'])
+def api_transactions():
+    if not sheets_client:
+        return jsonify([])
+    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    result = [{
+        'id': r.get('ID', ''),
+        'name': r.get('اسم صاحب المعاملة الثلاثي', ''),
+        'status': r.get('الحالة', ''),
+        'employee': r.get('الموظف المسؤول', '')
+    } for r in records]
+    return jsonify(result)
+
+@app.route('/api/transaction/<id>', methods=['GET', 'POST'])
+def api_transaction(id):
+    if not sheets_client:
+        return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
+
+    if request.method == 'GET':
+        data = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
+        if not data:
+            return jsonify({'error': 'Not found'}), 404
+        return jsonify(data['data'])
+
+    else:
+        updates = request.json
+        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
+        if not row_info:
+            return jsonify({'success': False, 'message': 'المعاملة غير موجودة'})
+        row = row_info['row']
+        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+        headers = ws.row_values(1)
+
+        for key, value in updates.items():
+            if key in headers:
+                col = headers.index(key) + 1
+                ws.update_cell(row, col, value)
+
+        employee_name = updates.get('الموظف المسؤول', 'غير معروف')
+        if 'آخر تعديل بواسطة' in headers:
+            col_v = headers.index('آخر تعديل بواسطة') + 1
+            ws.update_cell(row, col_v, employee_name)
+        else:
+            ws.update_cell(row, 22, employee_name)
+
+        now = datetime.now().isoformat()
+        if 'آخر تعديل بتاريخ' in headers:
+            col_w = headers.index('آخر تعديل بتاريخ') + 1
+            ws.update_cell(row, col_w, now)
+        else:
+            ws.update_cell(row, 23, now)
+
+        try:
+            current_count_cell = ws.cell(row, 24).value
+            current_count = int(current_count_cell) if current_count_cell and str(current_count_cell).isdigit() else 0
+        except:
+            current_count = 0
+        new_count = current_count + 1
+        if 'عدد التعديلات' in headers:
+            col_x = headers.index('عدد التعديلات') + 1
+            ws.update_cell(row, col_x, new_count)
+        else:
+            ws.update_cell(row, 24, new_count)
+
+        try:
+            history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+            if history_ws:
+                history_ws.append_row([
+                    datetime.now().isoformat(),
+                    id,
+                    f"تم تحديث الحقول: {', '.join(updates.keys())}",
+                    employee_name
+                ])
+        except Exception as e:
+            logger.error(f"فشل تسجيل التاريخ: {e}")
+
+        if Config.ADMIN_CHAT_ID and background_loop and bot_app:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    bot_app.bot.send_message(
+                        chat_id=Config.ADMIN_CHAT_ID,
+                        text=f"✏️ *تحديث معاملة*\nالمعاملة: {id}\nبواسطة: {employee_name}",
+                        parse_mode='Markdown'
+                    ),
+                    background_loop
+                )
+            except Exception as e:
+                logger.error(f"فشل إرسال إشعار البوت: {e}")
+
+        return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
+
+@app.route('/api/history/<id>')
+def api_transaction_history(id):
+    if not sheets_client:
+        return jsonify([])
+    try:
+        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+        if not ws:
+            return jsonify([])
+        records = ws.get_all_records()
+        history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
+                   for r in records if str(r.get('ID')) == id]
+        history.sort(key=lambda x: x['time'], reverse=True)
+        return jsonify(history)
+    except Exception as e:
+        logger.error(f"خطأ في جلب التاريخ: {e}")
+        return jsonify([])
+
+@app.route('/ping')
+def ping():
+    return "pong"
+
+# ------------------ صفحة عرض QR كبيرة ------------------
+@app.route('/qr/<id>')
+def qr_page(id):
+    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    qr_base64 = QRGenerator.generate_qr(view_link)
+    html = f"""
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <title>QR Code للمعاملة {id}</title>
+        <style>
+            body {{ display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f5f5f5; }}
+            img {{ max-width: 90%; max-height: 90%; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
+        </style>
+    </head>
+    <body>
+        <img src="data:image/png;base64,{qr_base64}" alt="QR Code للمعاملة {id}">
+    </body>
+    </html>
+    """
+    return html
+
+@app.route('/qr_image/<id>')
+def qr_image(id):
+    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    qr_base64 = QRGenerator.generate_qr(view_link)
+    img_data = base64.b64decode(qr_base64)
+    return Response(img_data, mimetype='image/png')
+
+# ------------------ صفحات HTML الرئيسية ------------------
 @app.route('/')
 def index():
     return render_template_string(INDEX_HTML)
@@ -522,6 +576,97 @@ def edit_transaction_page(id):
 @app.route('/view/<id>')
 def view_transaction_page(id):
     return render_template_string(VIEW_HTML)
+
+# ------------------ مسار الفورم (للاختبار المباشر) ------------------
+@app.route('/new-transaction', methods=['GET', 'POST'])
+def new_transaction():
+    if request.method == 'GET':
+        return render_template_string(NEW_TRANSACTION_HTML)
+    else:
+        try:
+            data = {
+                'اسم صاحب المعاملة الثلاثي': request.form.get('name'),
+                'رقم الهاتف': request.form.get('phone'),
+                'القسم': request.form.get('department'),
+                'نوع المعاملة': request.form.get('type'),
+                'المرافقات': request.form.get('attachments'),
+            }
+            now = datetime.now()
+            date_str = now.strftime("%Y%m%d%H%M%S")
+            random_part = random.randint(1000, 9999)
+            transaction_id = f"MUT-{date_str}-{random_part}"
+
+            ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+            if not ws:
+                return "خطأ في الاتصال بـ Google Sheets", 500
+
+            headers = ws.row_values(1)
+            new_row = []
+            for col in headers:
+                if col == 'ID':
+                    new_row.append(transaction_id)
+                else:
+                    new_row.append(data.get(col, ''))
+            ws.append_row(new_row)
+            logger.info(f"✅ تم إضافة معاملة جديدة: {transaction_id}")
+
+            return render_template_string(
+                SUCCESS_HTML,
+                transaction_id=transaction_id,
+                bot_username=Config.BOT_USERNAME,
+                web_app_url=Config.WEB_APP_URL
+            )
+        except Exception as e:
+            logger.error(f"خطأ في إضافة المعاملة: {e}")
+            return "حدث خطأ أثناء حفظ البيانات", 500
+
+# ------------------ استقبال البيانات من Google Form ------------------
+@app.route('/form-submit', methods=['POST'])
+def form_submit():
+    """استقبال بيانات من Google Apps Script"""
+    try:
+        data = request.json
+        # توليد ID فريد
+        now = datetime.now()
+        date_str = now.strftime("%Y%m%d%H%M%S")
+        random_part = random.randint(1000, 9999)
+        transaction_id = f"MUT-{date_str}-{random_part}"
+
+        # حفظ البيانات في Google Sheets
+        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+        if not ws:
+            return jsonify({'success': False, 'error': 'Sheets not accessible'}), 500
+
+        headers = ws.row_values(1)
+        new_row = []
+        for col in headers:
+            if col == 'ID':
+                new_row.append(transaction_id)
+            else:
+                # مطابقة أسماء الأعمدة مع أسماء الحقول في النموذج
+                value = data.get(col, '')
+                new_row.append(value)
+        ws.append_row(new_row)
+        logger.info(f"✅ تم إضافة معاملة جديدة من Google Form: {transaction_id}")
+
+        # إرجاع رابط صفحة النجاح
+        success_url = f"{Config.WEB_APP_URL}/transaction-success/{transaction_id}"
+        return jsonify({'success': True, 'redirect_url': success_url})
+
+    except Exception as e:
+        logger.error(f"خطأ في form-submit: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# ------------------ صفحة النجاح (تعرض ID وزر البوت) ------------------
+@app.route('/transaction-success/<transaction_id>')
+def transaction_success(transaction_id):
+    """صفحة النجاح التي تعرض ID وزر البوت"""
+    return render_template_string(
+        SUCCESS_HTML,
+        transaction_id=transaction_id,
+        bot_username=Config.BOT_USERNAME,
+        web_app_url=Config.WEB_APP_URL
+    )
 
 # ------------------ Webhook ------------------
 @app.route('/webhook', methods=['POST'])

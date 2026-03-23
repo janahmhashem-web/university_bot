@@ -10,12 +10,9 @@ class Config:
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
 
-    # Resend API
-    RESEND_API_KEY = os.getenv('RESEND_API_KEY')
-    RESEND_FROM_EMAIL = os.getenv('RESEND_FROM_EMAIL', 'onboarding@resend.dev')
-    RESEND_FROM_NAME = os.getenv('RESEND_FROM_NAME', 'نظام المعاملات')
-
+    # Google Sheets
     SHEET_MANAGER = "manager"
     SHEET_QR = "QR"
     SHEET_ARCHIVE = "Archive"
     SHEET_HISTORY = "TransactionHistory"
+    SHEET_SUBSCRIBERS = "Subscribers"
