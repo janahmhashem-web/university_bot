@@ -270,7 +270,6 @@ monitoring_thread = None
 stop_monitoring = threading.Event()
 
 def process_transaction(transaction_data):
-    """معالجة معاملة واحدة في خيط منفصل (بدون إيميل)"""
     try:
         ws, row_number, new_row, transaction_id = transaction_data
         if not transaction_id:
@@ -291,7 +290,6 @@ def process_transaction(transaction_data):
             email = new_row.get('البريد الإلكتروني', '')
             qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
             qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
-
             qr_ws.append_row([name, email, transaction_id, view_link, qr_image_url, qr_page_link])
             new_row_num = len(qr_ws.get_all_values())
             qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
@@ -477,7 +475,6 @@ def init_bot():
     try:
         logger.info("📦 بناء تطبيق البوت...")
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-        # إضافة المعالجات (هنا نضيفها كما هي)
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
@@ -490,69 +487,54 @@ def init_bot():
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
-        # تهيئة البوت بشكل متزامن (بدون حلقة خلفية معقدة)
-        # نستخدم asyncio.run() مباشرة في خيط منفصل
-        async def init_and_run():
+        async def init_bot_async():
+            logger.info("🔄 تهيئة البوت في الحلقة غير المتزامنة...")
             await bot_app.initialize()
-            logger.info("✅ تم تهيئة البوت")
-            # تعيين webhook
-            await set_webhook_async()
-            # بدء المراقبة (في خيط منفصل لأنها تحتوي على حلقة لا نهائية)
-            start_monitoring()
-            # الحفاظ على التطبيق قيد التشغيل
-            await asyncio.Event().wait()  # يبقى إلى الأبد
+            logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
 
-        def start_async():
-            asyncio.run(init_and_run())
+        def start_background_loop():
+            global background_loop
+            background_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(background_loop)
+            background_loop.run_until_complete(init_bot_async())
+            logger.info("🔄 بدء حلقة الأحداث الخلفية...")
+            background_loop.run_forever()
 
-        # تشغيل asyncio.run في خيط منفصل
-        loop_thread = threading.Thread(target=start_async, daemon=True)
+        loop_thread = threading.Thread(target=start_background_loop, daemon=True)
         loop_thread.start()
-        logger.info("⏳ انتظار اكتمال التهيئة...")
-        time.sleep(3)  # انتظر قليلاً
-        logger.info("✅ اكتملت التهيئة")
+        logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
+        time.sleep(3)
+        logger.info("✅ خلفية البوت تعمل")
 
+        # تعيين webhook
+        time.sleep(2)
+        logger.info("🌐 محاولة تعيين webhook...")
+        for attempt in range(1, 4):
+            try:
+                set_webhook_sync()
+                logger.info("✅ تم تعيين webhook بنجاح.")
+                break
+            except Exception as e:
+                logger.error(f"❌ محاولة {attempt} فشلت: {e}")
+                if attempt < 3:
+                    time.sleep(5)
+        else:
+            logger.warning("⚠️ لم يتم تعيين webhook تلقائياً، يمكنك تعيينه يدوياً.")
+
+        # بدء حلقة المراقبة
+        if sheets_client:
+            try:
+                last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
+                logger.info(f"📋 عدد المعاملات الحالي: {last_row_count}")
+            except Exception as e:
+                logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
+                last_row_count = 0
+
+            monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
+            monitoring_thread.start()
+            logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات (كل 5 ثوانٍ)")
+        else:
+            logger.warning("⚠️ sheets_client غير متاح، لن يتم تشغيل المراقبة")
     except Exception as e:
         logger.error(f"❌ فشل إعداد البوت: {e}", exc_info=True)
         bot_app = None
-
-async def set_webhook_async():
-    """تعيين webhook بشكل غير متزامن مع محاولات إعادة"""
-    if not bot_app or not Config.WEB_APP_URL:
-        return
-    webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
-    token = Config.TELEGRAM_BOT_TOKEN
-    for attempt in range(1, 4):
-        try:
-            # استخدام مكتبة aiohttp بدلاً من requests ليكون غير متزامن
-            async with aiohttp.ClientSession() as session:
-                async with session.post(f"https://api.telegram.org/bot{token}/deleteWebhook") as resp:
-                    logger.info(f"حذف webhook: {resp.status}")
-                async with session.post(f"https://api.telegram.org/bot{token}/setWebhook", data={"url": webhook_url}) as resp:
-                    result = await resp.json()
-                    if result.get("ok"):
-                        logger.info(f"✅ Webhook set to {webhook_url}")
-                        return
-                    else:
-                        logger.error(f"❌ فشل تعيين webhook: {result}")
-        except Exception as e:
-            logger.error(f"❌ محاولة {attempt} فشلت: {e}")
-        await asyncio.sleep(5)
-    logger.warning("⚠️ لم يتم تعيين webhook تلقائياً")
-
-def start_monitoring():
-    """بدء حلقة المراقبة في خيط منفصل"""
-    def loop():
-        logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات (كل 5 ثوانٍ)")
-        last_alert_time = time.time()
-        while True:
-            try:
-                check_new_transactions()
-                check_transaction_updates()
-                if time.time() - last_alert_time >= 3600:
-                    smart_alerts()
-                    last_alert_time = time.time()
-            except Exception as e:
-                logger.error(f"خطأ في حلقة المراقبة: {e}")
-            time.sleep(5)
-    threading.Thread(target=loop, daemon=True).start()
