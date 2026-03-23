@@ -102,16 +102,16 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                     <tr>
+                    <tr>
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                     </tr>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-            </table>
+             </table>
         </div>
     </div>
     <script>
@@ -441,13 +441,11 @@ def api_transactions():
 def api_transaction(id):
     if not sheets_client:
         return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
-
     if request.method == 'GET':
         data = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
         if not data:
             return jsonify({'error': 'Not found'}), 404
         return jsonify(data['data'])
-
     else:
         updates = request.json
         row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
@@ -536,7 +534,6 @@ def api_transaction_history(id):
 def ping():
     return "pong"
 
-# ------------------ صفحة عرض QR ------------------
 @app.route('/qr/<id>')
 def qr_page(id):
     view_link = f"{Config.WEB_APP_URL}/view/{id}"
@@ -566,7 +563,6 @@ def qr_image(id):
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
 
-# ------------------ صفحات HTML الرئيسية ------------------
 @app.route('/')
 def index():
     return render_template_string(INDEX_HTML)
@@ -579,7 +575,6 @@ def edit_transaction_page(id):
 def view_transaction_page(id):
     return render_template_string(VIEW_HTML)
 
-# ------------------ مسار الفورم المباشر ------------------
 @app.route('/new-transaction', methods=['GET', 'POST'])
 def new_transaction():
     if request.method == 'GET':
@@ -622,7 +617,6 @@ def new_transaction():
             logger.error(f"خطأ في إضافة المعاملة: {e}")
             return "حدث خطأ أثناء حفظ البيانات", 500
 
-# ------------------ استقبال البيانات من Google Form ------------------
 @app.route('/form-submit', methods=['POST'])
 def form_submit():
     try:
@@ -653,7 +647,6 @@ def form_submit():
         logger.error(f"خطأ في form-submit: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# ------------------ صفحة النجاح ------------------
 @app.route('/transaction-success/<transaction_id>')
 def transaction_success(transaction_id):
     return render_template_string(
@@ -663,7 +656,6 @@ def transaction_success(transaction_id):
         web_app_url=Config.WEB_APP_URL
     )
 
-# ------------------ Webhook ------------------
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if bot_app is None or background_loop is None:
