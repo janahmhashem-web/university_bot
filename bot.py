@@ -11,8 +11,6 @@ import random
 from concurrent.futures import ThreadPoolExecutor
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 import atexit
 import requests
 
@@ -45,7 +43,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
-    
     if context.args:
         transaction_id = context.args[0]
         msg += f"تم استلام معاملتك رقم: *{transaction_id}*\n"
@@ -62,7 +59,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_admin:
             msg += "\n👑 *أوامر المدير:*\n"
             msg += "🔹 /stats - إحصائيات عامة\n"
-    
     await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,6 +240,7 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await get_id(update, context)
         return
 
+    # البحث عن معاملة المستخدم في جدول المشتركين
     transaction_id = None
     user_id = update.effective_user.id
     if sheets_client:
@@ -270,6 +267,8 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, tr
 last_row_count = 0
 last_state = {}
 executor = ThreadPoolExecutor(max_workers=10)
+monitoring_thread = None
+stop_monitoring = threading.Event()
 
 def process_transaction(transaction_data):
     """معالجة معاملة واحدة في خيط منفصل (بدون إيميل)"""
@@ -301,8 +300,6 @@ def process_transaction(transaction_data):
             qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
             logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
-        # لا إرسال إيميل
-
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         if history_ws:
             history_ws.append_row([
@@ -312,7 +309,6 @@ def process_transaction(transaction_data):
                 "النظام"
             ])
 
-        # تخزين الحالة الأولية للمعاملة لمراقبة التغييرات
         global last_state
         last_state[transaction_id] = (
             new_row.get('الحالة', ''),
@@ -323,7 +319,7 @@ def process_transaction(transaction_data):
         logger.error(f"❌ خطأ في معالجة المعاملة: {e}", exc_info=True)
 
 def check_new_transactions():
-    """فحص دوري كل 5 ثوانٍ لاكتشاف المعاملات الجديدة وتفويضها للمعالجة المتوازية"""
+    """فحص المعاملات الجديدة وإرسالها للمعالجة المتوازية"""
     global last_row_count
     try:
         if not sheets_client:
@@ -350,7 +346,7 @@ def check_new_transactions():
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
 def check_transaction_updates():
-    """مراقبة تغيرات الحالة وإرسال إشعارات فورية للمشتركين (كل 5 ثوانٍ)"""
+    """مراقبة تغيرات الحالة وإرسال إشعارات للمشتركين"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -370,7 +366,6 @@ def check_transaction_updates():
             if tx_id in last_state:
                 old_state = last_state[tx_id]
                 if old_state != current_state:
-                    # إرسال إشعار للمشتركين
                     subs_ws = sheets_client.get_worksheet(Config.SHEET_SUBSCRIBERS)
                     if subs_ws:
                         subs = subs_ws.get_all_records()
@@ -399,7 +394,7 @@ def check_transaction_updates():
         logger.error(f"خطأ في check_transaction_updates: {e}")
 
 def smart_alerts():
-    """تنبيهات دورية للمعاملات المتأخرة (كل ساعة)"""
+    """تنبيهات دورية للمعاملات المتأخرة (تُستدعى من حلقة المراقبة)"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -434,6 +429,23 @@ def smart_alerts():
     except Exception as e:
         logger.error(f"خطأ في smart_alerts: {e}")
 
+def monitoring_loop():
+    """حلقة مراقبة بسيطة تعمل كل 5 ثوانٍ (بديل عن apscheduler)"""
+    logger.info("🔄 بدء حلقة المراقبة اليدوية (كل 5 ثوانٍ)")
+    last_alert_time = time.time()
+    while not stop_monitoring.is_set():
+        try:
+            check_new_transactions()
+            check_transaction_updates()
+            # تنبيهات التأخير كل ساعة
+            if time.time() - last_alert_time >= 3600:
+                smart_alerts()
+                last_alert_time = time.time()
+        except Exception as e:
+            logger.error(f"خطأ في حلقة المراقبة: {e}")
+        time.sleep(5)
+    logger.info("🛑 توقفت حلقة المراقبة")
+
 # ------------------ إعداد البوت وحلقة الأحداث ------------------
 bot_app = None
 background_loop = None
@@ -463,14 +475,15 @@ def set_webhook_sync():
         logger.error(f"❌ خطأ في تعيين webhook: {e}")
 
 def init_bot():
-    global bot_app, background_loop, loop_thread
-    logger.info("🚀 [DEBUG] بدء init_bot")
+    global bot_app, background_loop, loop_thread, monitoring_thread, last_row_count
+    logger.info("🚀 بدء init_bot")
     if not Config.TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN غير موجود")
         return
     try:
         logger.info("📦 بناء تطبيق البوت...")
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
+        # إضافة المعالجات
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
@@ -512,10 +525,8 @@ def init_bot():
         threading.Thread(target=delayed_webhook, daemon=True).start()
         logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-        # بدء جدولة المهام
-        global scheduler, last_row_count, executor
+        # بدء حلقة المراقبة (بديل عن apscheduler)
         if sheets_client:
-            logger.info("📊 تهيئة جدولة المهام...")
             try:
                 last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
                 logger.info(f"📋 عدد المعاملات الحالي: {last_row_count}")
@@ -523,14 +534,9 @@ def init_bot():
                 logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
                 last_row_count = 0
 
-            scheduler = BackgroundScheduler()
-            scheduler.start()
-            logger.info("🔄 إضافة مهام إلى المجدول...")
-            scheduler.add_job(check_new_transactions, IntervalTrigger(seconds=5), id='check_new')
-            scheduler.add_job(check_transaction_updates, IntervalTrigger(seconds=5), id='check_updates')
-            scheduler.add_job(smart_alerts, IntervalTrigger(seconds=3600), id='smart_alerts')
-            logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات والتنبيهات (فحص كل 5 ثوانٍ، معالجة متوازية بـ 10 خيوط)")
-            atexit.register(lambda: scheduler.shutdown())
+            monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
+            monitoring_thread.start()
+            logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات (كل 5 ثوانٍ)")
         else:
             logger.warning("⚠️ sheets_client غير متاح، لن يتم تشغيل المراقبة")
     except Exception as e:
