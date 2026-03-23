@@ -343,7 +343,7 @@ def check_new_transactions():
                 row_number = i + 2
                 new_row = records[i]
 
-                # التأكد من وجود ID
+                # التأكد من وجود ID في العمود H (8)
                 transaction_id = new_row.get('ID')
                 if not transaction_id:
                     now = datetime.now()
@@ -357,7 +357,7 @@ def check_new_transactions():
                         logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
                         continue
 
-                # كتابة رابط العرض في العمود U
+                # كتابة رابط العرض في العمود U (21)
                 view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
                 hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
                 try:
@@ -536,65 +536,85 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحة التحقق (الرابط الذي سيراه المستخدم) ------------------
-@app.route('/verify')
+# ------------------ صفحة التحقق (المستخدم) ------------------
+@app.route('/verify', methods=['GET'])
 def verify_page():
-    return '''
-    <!DOCTYPE html>
-    <html dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>التحقق من المعاملة</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-    </head>
-    <body class="bg-gray-100 p-4">
-        <div class="max-w-md mx-auto bg-white rounded-xl shadow-md p-6">
-            <h2 class="text-xl font-bold mb-4 text-center">التحقق من المعاملة</h2>
-            <div class="space-y-4">
-                <input type="text" id="name" placeholder="الاسم الثلاثي" class="w-full p-2 border rounded-lg">
-                <input type="text" id="phone" placeholder="رقم الهاتف" class="w-full p-2 border rounded-lg">
-                <button onclick="verify()" class="w-full bg-blue-500 text-white p-2 rounded-lg">تحقق</button>
-            </div>
-            <div id="result" class="mt-4 text-center"></div>
-        </div>
-        <script>
-            async function verify() {
-                const name = document.getElementById('name').value.trim();
-                const phone = document.getElementById('phone').value.trim();
-                const resultDiv = document.getElementById('result');
-                resultDiv.innerHTML = 'جاري التحقق...';
-                try {
-                    const res = await fetch('/api/verify', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({name, phone})
-                    });
-                    const data = await res.json();
-                    if (data.success) {
-                        resultDiv.innerHTML = `
-                            <div class="bg-green-100 p-3 rounded-lg mt-2">
-                                ✅ تم العثور على معاملتك<br>
-                                🆔 <strong>${data.id}</strong><br>
-                                ⚠️ احتفظ بهذا الرقم<br>
-                                <a href="https://t.me/${data.bot_username}?start=${data.id}" 
-                                   class="inline-block mt-2 bg-blue-600 text-white px-4 py-2 rounded-lg">
-                                   🔗 فتح البوت
-                                </a>
-                            </div>
-                        `;
-                    } else {
-                        resultDiv.innerHTML = '<div class="bg-red-100 p-3 rounded-lg mt-2">❌ البيانات غير صحيحة</div>';
-                    }
-                } catch(e) {
-                    resultDiv.innerHTML = '<div class="bg-red-100 p-3 rounded-lg mt-2">حدث خطأ، حاول مرة أخرى</div>';
-                }
-            }
-        </script>
-    </body>
-    </html>
-    '''
+    name = request.args.get('name', '').strip()
+    phone = request.args.get('phone', '').strip()
 
+    if name and phone:
+        # البحث عن المعاملة
+        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+        if ws:
+            records = ws.get_all_records()
+            for row in records:
+                row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
+                row_phone = str(row.get('رقم الهاتف', '')).strip()
+                if row_name == name.lower() and row_phone == phone:
+                    transaction_id = row.get('ID')
+                    if transaction_id:
+                        return f"""
+                        <!DOCTYPE html>
+                        <html dir="rtl">
+                        <head>
+                            <meta charset="UTF-8">
+                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                            <title>معاملتك</title>
+                            <style>
+                                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; text-align: center; }}
+                                .card {{ max-width: 500px; margin: 50px auto; background: white; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }}
+                                .id {{ font-size: 28px; font-weight: bold; color: #e67e22; background: #fef5e8; display: inline-block; padding: 8px 20px; border-radius: 40px; margin: 15px 0; letter-spacing: 1px; }}
+                                .btn {{ display: inline-block; background: #2c3e50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 10px 5px; transition: 0.3s; }}
+                                .btn-telegram {{ background: #0088cc; }}
+                                .btn:hover {{ opacity: 0.9; transform: translateY(-2px); }}
+                            </style>
+                        </head>
+                        <body>
+                            <div class="card">
+                                <h2>✅ تم العثور على معاملتك</h2>
+                                <p>رقم المعاملة الخاص بك:</p>
+                                <div class="id">{transaction_id}</div>
+                                <p>احتفظ بهذا الرقم لمتابعة المعاملة.</p>
+                                <a href="{Config.WEB_APP_URL}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
+                                <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت لمتابعة المعاملة</a>
+                            </div>
+                        </body>
+                        </html>
+                        """
+            return "<html dir='rtl'><body style='text-align:center;margin-top:50px;'><h2>❌ لم نجد معاملة بهذه البيانات</h2></body></html>"
+        else:
+            return "<html dir='rtl'><body style='text-align:center;margin-top:50px;'><h2>⚠️ مشكلة في الاتصال بقاعدة البيانات</h2></body></html>"
+    else:
+        # عرض النموذج العادي
+        return '''
+        <!DOCTYPE html>
+        <html dir="rtl">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>التحقق من المعاملة</title>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; text-align: center; }
+                .card { max-width: 400px; margin: 50px auto; background: white; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }
+                input { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
+                button { background: #2c3e50; color: white; padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; width: 100%; font-size: 16px; }
+                button:hover { opacity: 0.9; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>🔍 التحقق من المعاملة</h2>
+                <form method="GET">
+                    <input type="text" name="name" placeholder="الاسم الثلاثي" required>
+                    <input type="text" name="phone" placeholder="رقم الهاتف" required>
+                    <button type="submit">تحقق</button>
+                </form>
+            </div>
+        </body>
+        </html>
+        '''
+
+# ------------------ صفحة API للتحقق (POST) للاستخدام البديل ------------------
 @app.route('/api/verify', methods=['POST'])
 def api_verify():
     data = request.json
@@ -613,7 +633,6 @@ def api_verify():
 
     records = ws.get_all_records()
     for row in records:
-        # تأكد من تطابق أسماء الأعمدة مع جدولك
         row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
         row_phone = str(row.get('رقم الهاتف', '')).strip()
         if row_name == name and row_phone == phone:
@@ -625,19 +644,6 @@ def api_verify():
                     'bot_username': Config.BOT_USERNAME
                 })
     return jsonify({'success': False})
-
-# ------------------ صفحات HTML ------------------
-@app.route('/')
-def index():
-    return render_template_string(INDEX_HTML)
-
-@app.route('/transaction/<id>')
-def edit_transaction_page(id):
-    return render_template_string(EDIT_HTML)
-
-@app.route('/view/<id>')
-def view_transaction_page(id):
-    return render_template_string(VIEW_HTML)
 
 # ------------------ صفحات QR ------------------
 @app.route('/qr/<id>')
@@ -684,7 +690,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                    <tr>
+                    发展
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
@@ -1004,6 +1010,18 @@ VIEW_HTML = """
 </body>
 </html>
 """
+
+@app.route('/')
+def index():
+    return render_template_string(INDEX_HTML)
+
+@app.route('/transaction/<id>')
+def edit_transaction_page(id):
+    return render_template_string(EDIT_HTML)
+
+@app.route('/view/<id>')
+def view_transaction_page(id):
+    return render_template_string(VIEW_HTML)
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
