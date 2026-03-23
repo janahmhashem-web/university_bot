@@ -464,10 +464,12 @@ def set_webhook_sync():
 
 def init_bot():
     global bot_app, background_loop, loop_thread
+    logger.info("🚀 [DEBUG] بدء init_bot")
     if not Config.TELEGRAM_BOT_TOKEN:
         logger.error("❌ TELEGRAM_BOT_TOKEN غير موجود")
         return
     try:
+        logger.info("📦 بناء تطبيق البوت...")
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
@@ -482,6 +484,7 @@ def init_bot():
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
         async def init_bot_async():
+            logger.info("🔄 تهيئة البوت في الحلقة غير المتزامنة...")
             await bot_app.initialize()
             logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
 
@@ -490,13 +493,16 @@ def init_bot():
             background_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(background_loop)
             background_loop.run_until_complete(init_bot_async())
+            logger.info("🔄 بدء حلقة الأحداث الخلفية...")
             background_loop.run_forever()
 
         loop_thread = threading.Thread(target=start_background_loop, daemon=True)
         loop_thread.start()
         logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
         time.sleep(2)
+        logger.info("✅ خلفية البوت تعمل")
 
+        # تعيين webhook بعد 5 ثوانٍ
         def delayed_webhook():
             time.sleep(5)
             try:
@@ -509,19 +515,24 @@ def init_bot():
         # بدء جدولة المهام
         global scheduler, last_row_count, executor
         if sheets_client:
+            logger.info("📊 تهيئة جدولة المهام...")
             try:
                 last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
+                logger.info(f"📋 عدد المعاملات الحالي: {last_row_count}")
             except Exception as e:
                 logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
                 last_row_count = 0
 
             scheduler = BackgroundScheduler()
             scheduler.start()
+            logger.info("🔄 إضافة مهام إلى المجدول...")
             scheduler.add_job(check_new_transactions, IntervalTrigger(seconds=5), id='check_new')
             scheduler.add_job(check_transaction_updates, IntervalTrigger(seconds=5), id='check_updates')
             scheduler.add_job(smart_alerts, IntervalTrigger(seconds=3600), id='smart_alerts')
             logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات والتنبيهات (فحص كل 5 ثوانٍ، معالجة متوازية بـ 10 خيوط)")
             atexit.register(lambda: scheduler.shutdown())
+        else:
+            logger.warning("⚠️ sheets_client غير متاح، لن يتم تشغيل المراقبة")
     except Exception as e:
-        logger.error(f"❌ فشل إعداد البوت: {e}")
+        logger.error(f"❌ فشل إعداد البوت: {e}", exc_info=True)
         bot_app = None
