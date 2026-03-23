@@ -18,5 +18,4 @@ class Config:
     # AI
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-    # Other
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"

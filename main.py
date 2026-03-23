@@ -52,6 +52,27 @@ except Exception as e:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
+    args = context.args
+
+    # معالجة الرابط العميق (deep link)
+    if args:
+        transaction_id = args[0]
+        if sheets_client:
+            row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+            if row_info:
+                save_user_chat(transaction_id, user_id)
+                await update.message.reply_text(
+                    f"✅ تم ربط حسابك بالمعاملة\n\n"
+                    f"🆔 {transaction_id}\n"
+                    f"يمكنك متابعة معاملتك من هنا."
+                )
+            else:
+                await update.message.reply_text("❌ المعاملة غير موجودة")
+        else:
+            await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        return
+
+    # الرسالة العادية (بدون رابط)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
     msg += "📌 *الأوامر العامة:*\n"
     msg += "🔹 /id [رقم] - تفاصيل معاملة\n"
@@ -62,6 +83,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "\n👑 *أوامر المدير:*\n"
         msg += "🔹 /stats - إحصائيات عامة\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
+
+def save_user_chat(transaction_id, chat_id):
+    """حفظ chat_id في ورقة 'users' مرتبطة بمعرف المعاملة"""
+    try:
+        ws = sheets_client.get_worksheet('users')
+        if not ws:
+            ws = sheets_client.spreadsheet.add_worksheet(title='users', rows=1, cols=2)
+            ws.append_row(['transaction_id', 'chat_id'])
+        records = ws.get_all_records()
+        for i, row in enumerate(records):
+            if str(row.get('transaction_id')) == transaction_id:
+                ws.update_cell(i+2, 2, str(chat_id))
+                return
+        ws.append_row([transaction_id, str(chat_id)])
+    except Exception as e:
+        logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -499,11 +536,110 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-@app.route('/ping')
-def ping():
-    return "pong"
+# ------------------ صفحة التحقق (الرابط الذي سيراه المستخدم) ------------------
+@app.route('/verify')
+def verify_page():
+    return '''
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>التحقق من المعاملة</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-gray-100 p-4">
+        <div class="max-w-md mx-auto bg-white rounded-xl shadow-md p-6">
+            <h2 class="text-xl font-bold mb-4 text-center">التحقق من المعاملة</h2>
+            <div class="space-y-4">
+                <input type="text" id="name" placeholder="الاسم الثلاثي" class="w-full p-2 border rounded-lg">
+                <input type="text" id="phone" placeholder="رقم الهاتف" class="w-full p-2 border rounded-lg">
+                <button onclick="verify()" class="w-full bg-blue-500 text-white p-2 rounded-lg">تحقق</button>
+            </div>
+            <div id="result" class="mt-4 text-center"></div>
+        </div>
+        <script>
+            async function verify() {
+                const name = document.getElementById('name').value.trim();
+                const phone = document.getElementById('phone').value.trim();
+                const resultDiv = document.getElementById('result');
+                resultDiv.innerHTML = 'جاري التحقق...';
+                try {
+                    const res = await fetch('/api/verify', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({name, phone})
+                    });
+                    const data = await res.json();
+                    if (data.success) {
+                        resultDiv.innerHTML = `
+                            <div class="bg-green-100 p-3 rounded-lg mt-2">
+                                ✅ تم العثور على معاملتك<br>
+                                🆔 <strong>${data.id}</strong><br>
+                                ⚠️ احتفظ بهذا الرقم<br>
+                                <a href="https://t.me/${data.bot_username}?start=${data.id}" 
+                                   class="inline-block mt-2 bg-blue-600 text-white px-4 py-2 rounded-lg">
+                                   🔗 فتح البوت
+                                </a>
+                            </div>
+                        `;
+                    } else {
+                        resultDiv.innerHTML = '<div class="bg-red-100 p-3 rounded-lg mt-2">❌ البيانات غير صحيحة</div>';
+                    }
+                } catch(e) {
+                    resultDiv.innerHTML = '<div class="bg-red-100 p-3 rounded-lg mt-2">حدث خطأ، حاول مرة أخرى</div>';
+                }
+            }
+        </script>
+    </body>
+    </html>
+    '''
 
-# ------------------ صفحة عرض QR كبيرة ------------------
+@app.route('/api/verify', methods=['POST'])
+def api_verify():
+    data = request.json
+    name = data.get('name', '').strip().lower()
+    phone = data.get('phone', '').strip()
+
+    if not name or not phone:
+        return jsonify({'success': False})
+
+    if not sheets_client:
+        return jsonify({'success': False, 'error': 'Sheets not connected'})
+
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if not ws:
+        return jsonify({'success': False})
+
+    records = ws.get_all_records()
+    for row in records:
+        # تأكد من تطابق أسماء الأعمدة مع جدولك
+        row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
+        row_phone = str(row.get('رقم الهاتف', '')).strip()
+        if row_name == name and row_phone == phone:
+            transaction_id = row.get('ID')
+            if transaction_id:
+                return jsonify({
+                    'success': True,
+                    'id': transaction_id,
+                    'bot_username': Config.BOT_USERNAME
+                })
+    return jsonify({'success': False})
+
+# ------------------ صفحات HTML ------------------
+@app.route('/')
+def index():
+    return render_template_string(INDEX_HTML)
+
+@app.route('/transaction/<id>')
+def edit_transaction_page(id):
+    return render_template_string(EDIT_HTML)
+
+@app.route('/view/<id>')
+def view_transaction_page(id):
+    return render_template_string(VIEW_HTML)
+
+# ------------------ صفحات QR ------------------
 @app.route('/qr/<id>')
 def qr_page(id):
     view_link = f"{Config.WEB_APP_URL}/view/{id}"
@@ -526,7 +662,6 @@ def qr_page(id):
     """
     return html
 
-# ------------------ مسار صورة QR مباشرة ------------------
 @app.route('/qr_image/<id>')
 def qr_image(id):
     view_link = f"{Config.WEB_APP_URL}/view/{id}"
@@ -534,7 +669,7 @@ def qr_image(id):
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
 
-# ------------------ صفحات HTML ------------------
+# ------------------ صفحات HTML (للعرض والتعديل) ------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
@@ -549,7 +684,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                    发展
+                    <tr>
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
@@ -558,7 +693,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+            </table>
         </div>
     </div>
     <script>
@@ -571,7 +706,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -869,18 +1004,6 @@ VIEW_HTML = """
 </body>
 </html>
 """
-
-@app.route('/')
-def index():
-    return render_template_string(INDEX_HTML)
-
-@app.route('/transaction/<id>')
-def edit_transaction_page(id):
-    return render_template_string(EDIT_HTML)
-
-@app.route('/view/<id>')
-def view_transaction_page(id):
-    return render_template_string(VIEW_HTML)
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))

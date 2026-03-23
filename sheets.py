@@ -16,8 +16,8 @@ class GoogleSheetsClient:
             creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
-            # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي لجدول Google Sheets
-            self.spreadsheet = self.client.open("university system")
+            # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي لملف Google Sheets
+            self.spreadsheet = self.client.open("اسم_جدولك")
             logger.info("✅ تم الاتصال بـ Google Sheets")
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
