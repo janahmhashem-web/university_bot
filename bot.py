@@ -240,7 +240,6 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await get_id(update, context)
         return
 
-    # البحث عن معاملة المستخدم في جدول المشتركين
     transaction_id = None
     user_id = update.effective_user.id
     if sheets_client:
@@ -263,7 +262,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE, tr
     response = await ai_assistant.get_response(user_message, user_id, user_name, transaction_id)
     await update.message.reply_text(response)
 
-# ------------------ مراقبة المعاملات الجديدة ------------------
+# ------------------ مراقبة المعاملات ------------------
 last_row_count = 0
 last_state = {}
 executor = ThreadPoolExecutor(max_workers=10)
@@ -319,7 +318,6 @@ def process_transaction(transaction_data):
         logger.error(f"❌ خطأ في معالجة المعاملة: {e}", exc_info=True)
 
 def check_new_transactions():
-    """فحص المعاملات الجديدة وإرسالها للمعالجة المتوازية"""
     global last_row_count
     try:
         if not sheets_client:
@@ -346,7 +344,6 @@ def check_new_transactions():
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
 def check_transaction_updates():
-    """مراقبة تغيرات الحالة وإرسال إشعارات للمشتركين"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -394,7 +391,6 @@ def check_transaction_updates():
         logger.error(f"خطأ في check_transaction_updates: {e}")
 
 def smart_alerts():
-    """تنبيهات دورية للمعاملات المتأخرة (تُستدعى من حلقة المراقبة)"""
     try:
         if not sheets_client or not bot_app or not background_loop:
             return
@@ -430,14 +426,12 @@ def smart_alerts():
         logger.error(f"خطأ في smart_alerts: {e}")
 
 def monitoring_loop():
-    """حلقة مراقبة بسيطة تعمل كل 5 ثوانٍ (بديل عن apscheduler)"""
     logger.info("🔄 بدء حلقة المراقبة اليدوية (كل 5 ثوانٍ)")
     last_alert_time = time.time()
     while not stop_monitoring.is_set():
         try:
             check_new_transactions()
             check_transaction_updates()
-            # تنبيهات التأخير كل ساعة
             if time.time() - last_alert_time >= 3600:
                 smart_alerts()
                 last_alert_time = time.time()
@@ -446,7 +440,7 @@ def monitoring_loop():
         time.sleep(5)
     logger.info("🛑 توقفت حلقة المراقبة")
 
-# ------------------ إعداد البوت وحلقة الأحداث ------------------
+# ------------------ إعداد البوت ------------------
 bot_app = None
 background_loop = None
 loop_thread = None
@@ -483,7 +477,6 @@ def init_bot():
     try:
         logger.info("📦 بناء تطبيق البوت...")
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
-        # إضافة المعالجات
         bot_app.add_handler(CommandHandler("start", start))
         bot_app.add_handler(CommandHandler("id", get_id))
         bot_app.add_handler(CommandHandler("history", get_history))
@@ -512,31 +505,25 @@ def init_bot():
         loop_thread = threading.Thread(target=start_background_loop, daemon=True)
         loop_thread.start()
         logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
-        time.sleep(3)  # انتظر قليلاً للتأكد من اكتمال التهيئة
+        time.sleep(3)
         logger.info("✅ خلفية البوت تعمل")
 
-        # ========== تعيين webhook ==========
-        # ننتظر قليلاً إضافي لضمان استقرار الخادم
+        # تعيين webhook
         time.sleep(2)
         logger.info("🌐 محاولة تعيين webhook...")
-        success = False
         for attempt in range(1, 4):
             try:
                 set_webhook_sync()
-                success = True
+                logger.info("✅ تم تعيين webhook بنجاح.")
                 break
             except Exception as e:
-                logger.error(f"❌ محاولة {attempt} فشلت في تعيين webhook: {e}")
+                logger.error(f"❌ محاولة {attempt} فشلت: {e}")
                 if attempt < 3:
                     time.sleep(5)
-                else:
-                    logger.error("❌ فشل تعيين webhook بعد 3 محاولات.")
-        if success:
-            logger.info("✅ تم تعيين webhook بنجاح.")
         else:
-            logger.warning("⚠️ لم يتم تعيين webhook تلقائياً، يمكنك تعيينه يدوياً عبر الرابط.")
+            logger.warning("⚠️ لم يتم تعيين webhook تلقائياً، يمكنك تعيينه يدوياً.")
 
-        # بدء حلقة المراقبة (بديل عن apscheduler)
+        # بدء حلقة المراقبة
         if sheets_client:
             try:
                 last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
