@@ -89,18 +89,32 @@ def save_user_chat(transaction_id, chat_id):
     except Exception as e:
         logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
-# ------------------ نقطة استقبال المعاملة (توليد ID فوري) ------------------
+# ------------------ نقطة استقبال المعاملة (توليد ID فوري مع رفع الملفات) ------------------
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
     try:
-        data = request.json
-        name = data.get('name', '').strip()
-        phone = data.get('phone', '').strip()
-        function = data.get('function', '').strip()
-        department = data.get('department', '').strip()
-        transaction_type = data.get('transaction_type', '').strip()
-        attachments = data.get('attachments', '').strip()
-        timestamp = data.get('timestamp', datetime.now().isoformat())
+        # قراءة البيانات (قد تحتوي على ملف)
+        name = request.form.get('name', '').strip()
+        phone = request.form.get('phone', '').strip()
+        function = request.form.get('function', '').strip()
+        department = request.form.get('department', '').strip()
+        transaction_type = request.form.get('transaction_type', '').strip()
+        attachments_text = request.form.get('attachments_text', '').strip()
+        # معالجة الملف المرفوع
+        uploaded_file = request.files.get('attachment_file')
+        file_link = None
+        attachments = attachments_text
+        if uploaded_file and uploaded_file.filename:
+            file_data = uploaded_file.read()
+            file_link = sheets_client.upload_file_to_drive(file_data, uploaded_file.filename)
+            if file_link:
+                # دمج النص المكتوب مع رابط الملف
+                attachments = attachments_text + "\n" + file_link if attachments_text else file_link
+            else:
+                attachments = attachments_text
+        # إذا لم يوجد ملف، نستخدم النص فقط
+
+        timestamp = datetime.now().isoformat()
 
         if not name or not phone:
             return jsonify({'success': False, 'error': 'الاسم والهاتف مطلوبان'}), 400
@@ -118,9 +132,10 @@ def api_submit():
         random_part = random.randint(1000, 9999)
         transaction_id = f"MUT-{date_str}-{random_part}"
 
-        # الحصول على العناوين لتحديد موقع الأعمدة
+        # إعداد الصف الجديد لورقة manager
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
+        edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
         for idx, header in enumerate(headers):
             if header == 'Timestamp':
                 new_row[idx] = timestamp
@@ -138,18 +153,11 @@ def api_submit():
                 new_row[idx] = attachments
             elif header == 'ID':
                 new_row[idx] = transaction_id
-        ws.append_row(new_row)
+            elif header == 'الرابط':
+                new_row[idx] = edit_link   # نكتب الرابط كنص عادي، لا نحتاج تحديث منفصل
+        ws.append_row(new_row)   # كتابة واحدة فقط
 
-        # تحديث العمود U (21) برابط التعديل (للموظف)
-        last_row = len(ws.get_all_values())
-        edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
-        hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
-        try:
-            ws.update_cell(last_row, 21, hyperlink_formula)
-        except:
-            pass
-
-        # إدراج صف في شيت QR
+        # إدراج صف في شيت QR (كتابة واحدة)
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
@@ -163,16 +171,11 @@ def api_submit():
                 qr_page_link,
                 edit_link
             ])
-            new_qr_row = len(qr_ws.get_all_values())
-            qr_ws.update_cell(new_qr_row, 3, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-            qr_ws.update_cell(new_qr_row, 4, f'=IMAGE("{qr_image_url}")')
-            qr_ws.update_cell(new_qr_row, 5, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
-            qr_ws.update_cell(new_qr_row, 6, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
 
-        # تسجيل في TransactionHistory
+        # تسجيل التاريخ (كتابة إضافية – يمكن حذفها إذا أردنا تقليل الطلبات)
         sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
 
-        # إشعار للمسؤول
+        # إشعار للمسؤول (لا يستخدم API)
         if Config.ADMIN_CHAT_ID and background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
                 bot_app.bot.send_message(
@@ -209,15 +212,16 @@ def register_transaction():
                 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #f5f0ff 0%, #f0f2f5 100%); margin: 0; padding: 20px; }
                 .container { max-width: 700px; margin: 20px auto; background: white; border-radius: 32px; box-shadow: 0 20px 35px -10px rgba(0,0,0,0.1); overflow: hidden; }
                 .header { background: #8b5cf6; color: white; padding: 30px; text-align: center; }
-                .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
+                .header h1 { margin: 0; font-size: 28px; }
                 .header p { margin: 10px 0 0; opacity: 0.9; }
                 .content { padding: 30px; }
                 .form-group { margin-bottom: 20px; }
                 label { display: block; margin-bottom: 8px; font-weight: 600; color: #1f2937; }
-                input, select { width: 100%; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 16px; font-size: 16px; transition: all 0.2s; background: #f9fafb; }
-                input:focus, select:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); background: white; }
+                input, select, textarea { width: 100%; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 16px; font-size: 16px; transition: all 0.2s; background: #f9fafb; }
+                input:focus, select:focus, textarea:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); background: white; }
                 button { background: #8b5cf6; color: white; border: none; padding: 14px 24px; font-size: 18px; font-weight: 600; border-radius: 40px; width: 100%; cursor: pointer; transition: 0.2s; margin-top: 10px; }
                 button:hover { background: #7c3aed; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,92,246,0.3); }
+                button:disabled { background: #b39ddb; cursor: not-allowed; transform: none; box-shadow: none; }
                 .required:after { content: " *"; color: #ef4444; }
                 .info-box { background: #f3f4f6; border-radius: 20px; padding: 15px; margin-bottom: 20px; font-size: 14px; color: #4b5563; text-align: center; }
                 .result { margin-top: 20px; padding: 15px; border-radius: 20px; background: #f9fafb; display: none; }
@@ -235,18 +239,18 @@ def register_transaction():
                     <div class="info-box">
                         💡 بعد إرسال المعاملة، سيتم إنشاء رقم معاملة فريد وستحصل على رابط لمتابعة المعاملة عبر البوت.
                     </div>
-                    <form id="transactionForm">
+                    <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" required placeholder="مثال: أحمد محمد علي">
+                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" required placeholder="07712345678">
+                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
-                            <select id="function" required>
+                            <select id="function" name="function" required>
                                 <option value="طالب">طالب</option>
                                 <option value="تدريسي">تدريسي</option>
                                 <option value="أخرى">أخرى</option>
@@ -254,7 +258,7 @@ def register_transaction():
                         </div>
                         <div class="form-group">
                             <label class="required">القسم</label>
-                            <select id="department" required>
+                            <select id="department" name="department" required>
                                 <option value="قسم تكنولوجيا المعلومات و الإتصالات">قسم تكنولوجيا المعلومات و الإتصالات</option>
                                 <option value="قسم التقنيات الكهربائية">قسم التقنيات الكهربائية</option>
                                 <option value="قسم تقنيات المكائن والمعدات">قسم تقنيات المكائن والمعدات</option>
@@ -268,13 +272,18 @@ def register_transaction():
                         </div>
                         <div class="form-group">
                             <label>نوع المعاملة</label>
-                            <input type="text" id="transaction_type" placeholder="مثال: تتبع، استعلام، شكوى، اقتراح">
+                            <input type="text" id="transaction_type" name="transaction_type" placeholder="مثال: تتبع، استعلام، شكوى، اقتراح">
                         </div>
                         <div class="form-group">
-                            <label>المرافقات (رابط أو نص)</label>
-                            <input type="text" id="attachments" placeholder="رابط ملف، صورة، ملاحظة">
+                            <label>المرافقات (نص)</label>
+                            <textarea id="attachments_text" name="attachments_text" rows="2" placeholder="أي ملاحظات إضافية..."></textarea>
                         </div>
-                        <button type="submit">إرسال المعاملة</button>
+                        <div class="form-group">
+                            <label>رفع ملف (اختياري)</label>
+                            <input type="file" id="attachment_file" name="attachment_file" accept="*/*">
+                            <small style="color:#6c757d;">يمكنك رفع صورة، PDF، مستند... سيتم رفع الملف إلى Google Drive وسيظهر الرابط في المرافقات.</small>
+                        </div>
+                        <button type="submit" id="submitBtn">إرسال المعاملة</button>
                     </form>
                     <div id="result" class="result"></div>
                 </div>
@@ -282,22 +291,20 @@ def register_transaction():
             <script>
                 document.getElementById('transactionForm').addEventListener('submit', async (e) => {
                     e.preventDefault();
-                    const data = {
-                        name: document.getElementById('name').value.trim(),
-                        phone: document.getElementById('phone').value.trim(),
-                        function: document.getElementById('function').value,
-                        department: document.getElementById('department').value,
-                        transaction_type: document.getElementById('transaction_type').value.trim(),
-                        attachments: document.getElementById('attachments').value.trim()
-                    };
+                    const submitBtn = document.getElementById('submitBtn');
                     const resultDiv = document.getElementById('result');
+
+                    // تعطيل الزر ومنع الإرسال المتكرر
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'جاري الإرسال...';
                     resultDiv.innerHTML = '<div>جاري التسجيل...</div>';
                     resultDiv.className = 'result';
+
                     try {
+                        const formData = new FormData(e.target);
                         const res = await fetch('/api/submit', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(data)
+                            body: formData
                         });
                         const json = await res.json();
                         if (json.success) {
@@ -311,13 +318,18 @@ def register_transaction():
                                 </div>
                             `;
                             resultDiv.classList.add('success');
+                            // الزر يبقى معطلاً لأن الإرسال نجح ولا حاجة لإعادة المحاولة
                         } else {
                             resultDiv.innerHTML = `❌ فشل التسجيل: ${json.error || 'خطأ غير معروف'}`;
                             resultDiv.classList.add('error');
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = 'إرسال المعاملة';
                         }
                     } catch (err) {
                         resultDiv.innerHTML = '❌ خطأ في الاتصال بالخادم';
                         resultDiv.classList.add('error');
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'إرسال المعاملة';
                     }
                 });
             </script>
@@ -327,7 +339,7 @@ def register_transaction():
     else:
         return "Use /api/submit", 405
 
-# ------------------ دوال البوت ------------------
+# ------------------ دوال البوت (بدون تغيير) ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -605,48 +617,10 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة (احتياطي) ------------------
-last_row_count = 0
-
-def check_new_transactions():
-    global last_row_count
-    try:
-        if not sheets_client:
-            return
-        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-        if not ws:
-            return
-        records = ws.get_all_records()
-        current_count = len(records)
-        if current_count > last_row_count:
-            for i in range(last_row_count, current_count):
-                row_number = i + 2
-                new_row = records[i]
-                transaction_id = new_row.get('ID')
-                if not transaction_id:
-                    continue
-                edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
-                hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
-                try:
-                    ws.update_cell(row_number, 21, hyperlink_formula)
-                except:
-                    pass
-            last_row_count = current_count
-    except Exception as e:
-        logger.error(f"خطأ في مراقبة المعاملات: {e}")
-
-if sheets_client:
-    try:
-        last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
-    except Exception as e:
-        logger.error(f"فشل قراءة العدد الأولي: {e}")
-        last_row_count = 0
-
-    scheduler = BackgroundScheduler()
-    scheduler.start()
-    scheduler.add_job(check_new_transactions, 'interval', seconds=10, id='check_transactions')
-    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 10 ثوانٍ) - احتياطي")
-    atexit.register(lambda: scheduler.shutdown())
+# ------------------ تعطيل مراقبة المعاملات الجديدة لتوفير الطلبات ------------------
+# (تم تعطيلها لأن جميع المعاملات تدخل عبر /api/submit)
+# def check_new_transactions():
+#     pass
 
 # ------------------ نقاط نهاية API ------------------
 @app.route('/api/headers')
@@ -936,31 +910,26 @@ def view_transaction_page(id):
                 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
                 body {{ font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #f9f5ff 0%, #f3e8ff 100%); padding: 24px; min-height: 100vh; }}
                 .container {{ max-width: 1000px; margin: 0 auto; }}
-                /* بطاقة رئيسية */
                 .card {{ background: white; border-radius: 32px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1); overflow: hidden; margin-bottom: 24px; }}
                 .card-header {{ background: #8b5cf6; padding: 28px 32px; color: white; }}
                 .card-header h1 {{ font-size: 28px; font-weight: 700; margin-bottom: 8px; }}
                 .card-header p {{ opacity: 0.9; font-size: 14px; }}
                 .card-content {{ padding: 32px; }}
-                /* شبكة المعلومات */
                 .info-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-bottom: 32px; }}
                 .info-item {{ background: #faf5ff; border-radius: 24px; padding: 20px; transition: all 0.2s; }}
                 .info-label {{ font-size: 13px; font-weight: 600; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }}
                 .info-value {{ font-size: 16px; font-weight: 500; color: #1f2937; word-break: break-word; }}
-                /* تلوين الحالة */
                 .status-badge {{ display: inline-block; padding: 6px 14px; border-radius: 40px; font-size: 13px; font-weight: 600; }}
                 .status-new {{ background: #e2e3e5; color: #383d41; }}
                 .status-processing {{ background: #fff3cd; color: #856404; }}
                 .status-completed {{ background: #d4edda; color: #155724; }}
                 .status-delayed {{ background: #f8d7da; color: #721c24; }}
-                /* سجل التتبع */
                 .timeline {{ position: relative; padding-right: 30px; }}
                 .timeline-item {{ position: relative; padding-bottom: 28px; border-right: 2px solid #e9d5ff; margin-right: 12px; }}
                 .timeline-dot {{ position: absolute; right: -10px; top: 4px; width: 16px; height: 16px; background: #8b5cf6; border-radius: 50%; box-shadow: 0 0 0 4px #faf5ff; }}
                 .timeline-time {{ font-size: 12px; color: #6c757d; margin-bottom: 4px; }}
                 .timeline-action {{ font-weight: 600; color: #1f2937; margin-bottom: 4px; }}
                 .timeline-user {{ font-size: 12px; color: #9ca3af; }}
-                /* تعليمات */
                 .instructions {{ background: #faf5ff; border-radius: 24px; padding: 20px; margin-top: 24px; text-align: center; }}
                 .instructions p {{ margin: 8px 0; color: #4b5563; }}
                 .btn {{ display: inline-block; background: #8b5cf6; color: white; padding: 10px 20px; border-radius: 40px; text-decoration: none; margin-top: 12px; transition: 0.2s; }}
@@ -1281,7 +1250,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                    </tr>
+                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>

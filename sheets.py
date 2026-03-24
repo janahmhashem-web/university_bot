@@ -2,8 +2,11 @@ import os
 import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 import logging
 from datetime import datetime
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +20,10 @@ class GoogleSheetsClient:
             creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
+            # بناء خدمة Google Drive
+            self.drive_service = build('drive', 'v3', credentials=creds)
             # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي للجدول
-            self.spreadsheet = self.client.open("university system")
+            self.spreadsheet = self.client.open("اسم_جدولك")
             logger.info("✅ تم الاتصال بـ Google Sheets")
             self._init_sheets()
         except Exception as e:
@@ -93,3 +98,58 @@ class GoogleSheetsClient:
         ws = self.get_worksheet(sheet_name)
         if ws:
             ws.update_cell(row, col, value)
+
+    # ------------------ إضافة دالة رفع الملفات إلى Google Drive ------------------
+    def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
+        """رفع ملف إلى Google Drive وإرجاع الرابط العام"""
+        try:
+            # إنشاء مجلد إذا لم يكن موجوداً
+            folder_id = self._get_or_create_folder(folder_name)
+            # حفظ الملف مؤقتاً
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
+                tmp.write(file_data)
+                tmp_path = tmp.name
+
+            # رفع الملف
+            media = MediaFileUpload(tmp_path, resumable=True)
+            file_metadata = {
+                'name': filename,
+                'parents': [folder_id]
+            }
+            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            file_id = file.get('id')
+            # جعل الملف عاماً (أي شخص لديه الرابط يمكنه عرضه)
+            self.drive_service.permissions().create(
+                fileId=file_id,
+                body={'type': 'anyone', 'role': 'reader'}
+            ).execute()
+            # حذف الملف المؤقت
+            os.unlink(tmp_path)
+            # إرجاع رابط العرض المباشر
+            return f"https://drive.google.com/uc?export=view&id={file_id}"
+        except Exception as e:
+            logger.error(f"فشل رفع الملف إلى Drive: {e}")
+            return None
+
+    def _get_or_create_folder(self, folder_name):
+        """البحث عن مجلد باسم معين أو إنشاؤه وإرجاع معرفه"""
+        try:
+            response = self.drive_service.files().list(
+                q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            folders = response.get('files', [])
+            if folders:
+                return folders[0]['id']
+            else:
+                # إنشاء مجلد جديد
+                folder_metadata = {
+                    'name': folder_name,
+                    'mimeType': 'application/vnd.google-apps.folder'
+                }
+                folder = self.drive_service.files().create(body=folder_metadata, fields='id').execute()
+                return folder.get('id')
+        except Exception as e:
+            logger.error(f"فشل البحث/إنشاء المجلد: {e}")
+            raise
