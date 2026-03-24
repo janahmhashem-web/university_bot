@@ -62,13 +62,10 @@ async def notify_user(transaction_id, message):
             if str(row.get('transaction_id')) == str(transaction_id):
                 chat_id = row.get('chat_id')
                 if chat_id:
-                    asyncio.run_coroutine_threadsafe(
-                        bot_app.bot.send_message(
-                            chat_id=int(chat_id),
-                            text=message,
-                            parse_mode='Markdown'
-                        ),
-                        background_loop
+                    await bot_app.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=message,
+                        parse_mode='Markdown'
                     )
                 break
     except Exception as e:
@@ -417,9 +414,11 @@ def check_new_transactions():
                 sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام")
 
                 # إرسال إشعار للمستخدم إذا كان معرفه موجوداً
-                # يمكن قراءة user_id من العمود المناسب إذا كان موجوداً، أو تجاهل
-                # سنقوم بإرسال إشعار للمستخدم المسجل فقط إذا كان لديه chat_id
-                await notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})")
+                if background_loop and bot_app:
+                    asyncio.run_coroutine_threadsafe(
+                        notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})"),
+                        background_loop
+                    )
 
             last_row_count = current_count
     except Exception as e:
@@ -513,7 +512,11 @@ def api_transaction(id):
         if new_status == 'مكتملة':
             user_message += "✅ *المعاملة مكتملة!* شكراً لاستخدامك خدماتنا.\n"
 
-        await notify_user(id, user_message)
+        if background_loop and bot_app:
+            asyncio.run_coroutine_threadsafe(
+                notify_user(id, user_message),
+                background_loop
+            )
 
         return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
@@ -729,7 +732,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-            </table>
+             </table>
         </div>
     </div>
     <script>
@@ -742,7 +745,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });
