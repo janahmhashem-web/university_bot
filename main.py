@@ -112,15 +112,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
 
+    # الرسالة الترحيبية العادية
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
-    msg += "📌 *الأوامر العامة:*\n"
-    msg += "🔹 /id [رقم] - تفاصيل معاملة\n"
-    msg += "🔹 /history [رقم] - سجل تتبع معاملة\n"
-    msg += "🔹 /search [كلمة] - بحث في المعاملات\n"
-    msg += "🔹 /wake - للتأكد من أن البوت يعمل\n"
+    msg += "📌 *للاستفادة من البوت:*\n"
+    msg += "🔹 `/id [رقم]` - تفاصيل معاملة\n"
+    msg += "🔹 `/history [رقم]` - سجل تتبع كامل للمعاملة (من البداية إلى النهاية)\n"
+    msg += "🔹 `/qr` - تعليمات حول طباعة رمز QR لتتبع المعاملة\n"
+    msg += "🔹 `/support` - للتواصل مع فريق الدعم\n"
+    msg += "🔹 `/wake` - للتأكد من أن البوت يعمل\n"
     if is_admin:
         msg += "\n👑 *أوامر المدير:*\n"
-        msg += "🔹 /stats - إحصائيات عامة\n"
+        msg += "🔹 `/stats` - إحصائيات عامة\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -222,6 +224,32 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطأ في stats: {e}")
         await update.message.reply_text("حدث خطأ.")
 
+async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = "📱 *كيفية استخدام رمز QR لتتبع المعاملة*\n\n"
+    msg += "1️⃣ قم بطباعة رمز QR الموجود في صفحة المعاملة.\n"
+    msg += "2️⃣ الصق الورقة مع المعاملة في مكان واضح.\n"
+    msg += "3️⃣ عند مسح الرمز، ستظهر صفحة التتبع.\n"
+    msg += "4️⃣ يمكن لأي شخص لديه الرابط متابعة المعاملة.\n\n"
+    msg += "🔗 رابط QR الخاص بمعاملتك: `/qr [رقم المعاملة]` (إذا كنت قد ربطت حسابك).\n\n"
+    msg += "💡 *نصيحة:* احتفظ بالورقة في ملف المعاملة لتسهيل التتبع."
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_name = update.effective_user.first_name or ""
+    # إرسال رسالة للمدير
+    if Config.ADMIN_CHAT_ID:
+        await context.bot.send_message(
+            chat_id=Config.ADMIN_CHAT_ID,
+            text=f"📩 *رسالة دعم جديدة*\nمن: {user_name} (ID: {user_id})\n\nلطلب مساعدة، يرجى الرد عليه مباشرة.",
+            parse_mode='Markdown'
+        )
+    # رد للمستخدم
+    await update.message.reply_text(
+        "📨 تم إرسال طلبك إلى فريق الدعم. سيتم الرد عليك في أقرب وقت.\n"
+        "شكراً لتواصلك معنا."
+    )
+
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     logger.info(f"🧠 معالجة رسالة عادية: {text}")
@@ -273,6 +301,8 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("search", search))
         bot_app.add_handler(CommandHandler("wake", wake))
         bot_app.add_handler(CommandHandler("stats", stats))
+        bot_app.add_handler(CommandHandler("qr", qr_command))
+        bot_app.add_handler(CommandHandler("support", support_command))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
@@ -416,10 +446,15 @@ def check_new_transactions():
                 # تسجيل في TransactionHistory
                 sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام")
 
-                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً (يتم عبر notify_user)
+                # إرسال إشعار للمستخدم
                 if background_loop and bot_app:
+                    message = f"🎉 *تم إنشاء معاملة جديدة*\n\n"
+                    message += f"🆔 رقم المعاملة: `{transaction_id}`\n"
+                    message += f"🔗 [رابط المتابعة]({view_link})\n\n"
+                    message += f"📌 يمكنك متابعة كل تحديثات معاملتك عبر هذا البوت.\n"
+                    message += f"🔍 لعرض سجل التتبع الكامل، استخدم الأمر: `/history {transaction_id}`"
                     asyncio.run_coroutine_threadsafe(
-                        notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})"),
+                        notify_user(transaction_id, message),
                         background_loop
                     )
 
@@ -529,16 +564,40 @@ def api_transaction(id):
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # تحليل التأخير وإرسال إشعار
-        new_delay = updates.get('التأخير', old_data.get('التأخير'))
-        new_status = updates.get('الحالة', old_data.get('الحالة'))
-        user_message = f"✏️ *تم تحديث معاملتك {id}*\n"
-        user_message += f"الحقول المحدثة: {changes}\n"
-        if new_delay == 'نعم':
-            user_message += "⚠️ *المعاملة متأخرة!* يرجى المتابعة.\n"
-        if new_status == 'مكتملة':
-            user_message += "✅ *المعاملة مكتملة!* شكراً لاستخدامك خدماتنا.\n"
+        # بناء رسالة ذكية للمستخدم
+        user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
+        for key, new_value in updates.items():
+            old_value = old_data.get(key, '')
+            if key == 'الحالة' and new_value != old_value:
+                user_message += f"📌 تم تغيير الحالة إلى *{new_value}*\n"
+            elif key == 'المؤسسة التالية' and new_value != old_value:
+                user_message += f"🏢 تم نقل المعاملة إلى مؤسسة *{new_value}*\n"
+            elif key == 'الموظف المسؤول' and new_value != old_value:
+                user_message += f"👤 تم تعيين *{new_value}* مسؤولاً عن المعاملة\n"
+            elif key == 'التأخير':
+                if new_value == 'نعم' and old_value != 'نعم':
+                    user_message += f"⚠️ *المعاملة متأخرة!* يرجى المتابعة.\n"
+                elif new_value == 'لا' and old_value != 'لا':
+                    user_message += f"✅ تم حل التأخير\n"
+            elif key == 'الأولوية' and new_value != old_value:
+                user_message += f"⚡ الأولوية تغيرت إلى *{new_value}*\n"
+            elif key == 'تاريخ التحويل' and new_value != old_value:
+                user_message += f"📅 تم تحديث تاريخ التحويل إلى *{new_value}*\n"
+            elif key == 'سبب التحويل' and new_value != old_value:
+                user_message += f"📝 تم تحديث سبب التحويل\n"
+            elif key == 'الموافق' and new_value != old_value:
+                user_message += f"✅ تمت الموافقة من قبل *{new_value}*\n"
+            elif key == 'ملاحظات إضافية' and new_value != old_value:
+                user_message += f"💬 تم إضافة ملاحظات جديدة\n"
+            elif key == 'آخر إجراء' and new_value != old_value:
+                user_message += f"🔄 آخر إجراء: {new_value}\n"
 
+        if user_message == f"✏️ *معاملتك {id} تم تحديثها*\n\n":
+            user_message += "تم تحديث بيانات المعاملة.\n"
+
+        user_message += f"\n🔍 لمتابعة كل التغييرات: `/history {id}`"
+
+        # إرسال الإشعار الذكي للمستخدم
         if background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
                 notify_user(id, user_message),
@@ -710,7 +769,6 @@ def view_transaction_page(id):
                 display_value = value if value else '—'
                 if key == 'المرافقات' and value and value.startswith('http'):
                     display_value = f'<a href="{value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>'
-                # تلوين الحالة
                 if key == 'الحالة':
                     badge_class = "badge-new" if value == "جديد" else ("badge-processing" if value == "قيد المعالجة" else ("badge-completed" if value == "مكتملة" else ("badge-delayed" if value == "متأخرة" else "")))
                     display_value = f'<span class="badge {badge_class}">{value if value else "—"}</span>'
@@ -730,7 +788,6 @@ def view_transaction_page(id):
         """
         if history:
             for entry in history:
-                # تنسيق الوقت
                 try:
                     dt = datetime.fromisoformat(entry['time'])
                     time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -838,7 +895,6 @@ EDIT_HTML = """
             ];
             const excludedKeys = ['LOG_JSON', 'الرابط', 'عدد التعديلات', 'البريد الإلكتروني الموظف'];
 
-            // عرض الحقول للقراءة فقط
             const rc = document.getElementById('readonly-fields');
             rc.innerHTML = '';
             readonlyKeys.forEach(key => {
@@ -857,7 +913,6 @@ EDIT_HTML = """
                 }
             });
 
-            // بناء الحقول القابلة للتعديل
             const editableKeys = headers.filter(key => 
                 !readonlyKeys.includes(key) && !excludedKeys.includes(key)
             );
@@ -927,7 +982,6 @@ EDIT_HTML = """
         });
 
         function updateStatusColor(select) {
-            // إزالة الفئات القديمة وإضافة الجديدة حسب القيمة
             select.classList.remove('badge-new', 'badge-processing', 'badge-completed', 'badge-delayed');
             if (select.value === 'جديد') select.classList.add('badge-new');
             else if (select.value === 'قيد المعالجة') select.classList.add('badge-processing');
@@ -1003,13 +1057,12 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                    发展
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                     </tr>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
              </table>
@@ -1025,7 +1078,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                </tr>`;
                 tbody.innerHTML += row;
             });
         });
