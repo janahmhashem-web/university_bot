@@ -39,16 +39,7 @@ except Exception as e:
     sheets_client = None
 
 app = Flask(__name__)
-@app.route('/debug-sheet')
-def debug_sheet():
-    if not sheets_client:
-        return "sheets_client not ready"
-    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-    if not ws:
-        return "worksheet not found"
-    headers = ws.row_values(1)
-    rows = ws.get_all_values()[1:4]  # أول 3 صفوف بعد الرأس
-    return f"Headers: {headers}<br>First rows: {rows}"
+
 # ------------------ الذكاء الاصطناعي ------------------
 try:
     ai_assistant = AIAssistant()
@@ -634,7 +625,6 @@ def verify_page():
     name = request.args.get('name', '').strip()
     phone = request.args.get('phone', '').strip()
 
-    # إذا لم يصل اسم وهاتف، اعرض النموذج
     if not name or not phone:
         return '''
         <!DOCTYPE html>
@@ -664,7 +654,6 @@ def verify_page():
         </html>
         '''
 
-    # البحث عن المعاملة
     if not sheets_client:
         return "<html dir='rtl'><body><h2>⚠️ النظام غير متصل بقاعدة البيانات</h2></body></html>"
 
@@ -676,16 +665,19 @@ def verify_page():
     found = False
     transaction_id = None
 
-    # طباعة للتصحيح في سجلات Railway
-    logger.info(f"🔍 البحث عن: الاسم='{name}', الهاتف='{phone}'")
+    # تنظيف المدخلات
+    name_clean = name.strip().lower()
+    phone_clean = phone.strip()
+
+    logger.info(f"🔍 البحث عن: الاسم='{name_clean}', الهاتف='{phone_clean}'")
     logger.info(f"📊 عدد السجلات في الشيت: {len(records)}")
 
     for idx, row in enumerate(records):
-        row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip()
+        row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
         row_phone = str(row.get('رقم الهاتف', '')).strip()
         logger.info(f"📋 صف {idx+2}: الاسم='{row_name}', الهاتف='{row_phone}'")
         
-        if row_name == name and row_phone == phone:
+        if row_name == name_clean and row_phone == phone_clean:
             transaction_id = row.get('ID')
             if transaction_id:
                 found = True
@@ -722,7 +714,6 @@ def verify_page():
         </html>
         """
     else:
-        # عرض رسالة خطأ مع تفاصيل
         return f"""
         <!DOCTYPE html>
         <html dir="rtl">
@@ -1100,10 +1091,10 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                     </tr>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+            </table>
         </div>
     </div>
     <script>
@@ -1116,7 +1107,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });
