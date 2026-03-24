@@ -11,9 +11,12 @@ class Config:
 
     # Google Sheets
     GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+    # Sheet names
     SHEET_MANAGER = os.getenv("SHEET_MANAGER", "manager")
     SHEET_HISTORY = os.getenv("SHEET_HISTORY", "history")
     SHEET_QR = os.getenv("SHEET_QR", "qr")
+    SHEET_USERS = os.getenv("SHEET_USERS", "users")
 
     # AI
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")

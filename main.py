@@ -15,12 +15,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
 import requests
+from datetime import datetime
 
 from sheets import GoogleSheetsClient
 from config import Config
 from qr_generator import QRGenerator
 from ai_handler import AIAssistant
-from datetime import datetime
 
 # ------------------ إعداد التسجيل ------------------
 logging.basicConfig(
@@ -48,13 +48,56 @@ except Exception as e:
     logger.error(f"❌ فشل تهيئة Groq AI: {e}")
     ai_assistant = None
 
+# ------------------ دوال مساعدة ------------------
+async def notify_user(transaction_id, message):
+    """إرسال إشعار للمستخدم المرتبط بالمعاملة عبر البوت"""
+    if not sheets_client or not bot_app or not background_loop:
+        return
+    try:
+        ws = sheets_client.get_worksheet(Config.SHEET_USERS)
+        if not ws:
+            return
+        records = ws.get_all_records()
+        for row in records:
+            if str(row.get('transaction_id')) == str(transaction_id):
+                chat_id = row.get('chat_id')
+                if chat_id:
+                    asyncio.run_coroutine_threadsafe(
+                        bot_app.bot.send_message(
+                            chat_id=int(chat_id),
+                            text=message,
+                            parse_mode='Markdown'
+                        ),
+                        background_loop
+                    )
+                break
+    except Exception as e:
+        logger.error(f"فشل إرسال إشعار للمستخدم: {e}")
+
+def save_user_chat(transaction_id, chat_id):
+    """حفظ chat_id في ورقة users"""
+    try:
+        ws = sheets_client.get_worksheet(Config.SHEET_USERS)
+        if not ws:
+            ws = sheets_client.spreadsheet.worksheet(Config.SHEET_USERS)
+            if not ws:
+                ws = sheets_client.spreadsheet.add_worksheet(title=Config.SHEET_USERS, rows=1, cols=2)
+                ws.append_row(['transaction_id', 'chat_id'])
+        records = ws.get_all_records()
+        for i, row in enumerate(records):
+            if str(row.get('transaction_id')) == transaction_id:
+                ws.update_cell(i+2, 2, str(chat_id))
+                return
+        ws.append_row([transaction_id, str(chat_id)])
+    except Exception as e:
+        logger.error(f"فشل حفظ ربط المستخدم: {e}")
+
 # ------------------ دوال البوت الأساسية ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
     args = context.args
 
-    # معالجة الرابط العميق (deep link)
     if args:
         transaction_id = args[0]
         if sheets_client:
@@ -72,7 +115,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
 
-    # الرسالة العادية (بدون رابط)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
     msg += "📌 *الأوامر العامة:*\n"
     msg += "🔹 /id [رقم] - تفاصيل معاملة\n"
@@ -83,22 +125,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "\n👑 *أوامر المدير:*\n"
         msg += "🔹 /stats - إحصائيات عامة\n"
     await update.message.reply_text(msg, parse_mode='Markdown')
-
-def save_user_chat(transaction_id, chat_id):
-    """حفظ chat_id في ورقة 'users' مرتبطة بمعرف المعاملة"""
-    try:
-        ws = sheets_client.get_worksheet('users')
-        if not ws:
-            ws = sheets_client.spreadsheet.add_worksheet(title='users', rows=1, cols=2)
-            ws.append_row(['transaction_id', 'chat_id'])
-        records = ws.get_all_records()
-        for i, row in enumerate(records):
-            if str(row.get('transaction_id')) == transaction_id:
-                ws.update_cell(i+2, 2, str(chat_id))
-                return
-        ws.append_row([transaction_id, str(chat_id)])
-    except Exception as e:
-        logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -199,7 +225,6 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطأ في stats: {e}")
         await update.message.reply_text("حدث خطأ.")
 
-# ------------------ معالج ذكي للرسائل العادية ------------------
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     logger.info(f"🧠 معالجة رسالة عادية: {text}")
@@ -389,17 +414,12 @@ def check_new_transactions():
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
                 # تسجيل في TransactionHistory
-                history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-                if history_ws:
-                    try:
-                        history_ws.append_row([
-                            datetime.now().isoformat(),
-                            transaction_id,
-                            "تم إنشاء المعاملة",
-                            "النظام"
-                        ])
-                    except Exception as e:
-                        logger.error(f"❌ فشل تسجيل التاريخ: {e}")
+                sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام")
+
+                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً
+                # يمكن قراءة user_id من العمود المناسب إذا كان موجوداً، أو تجاهل
+                # سنقوم بإرسال إشعار للمستخدم المسجل فقط إذا كان لديه chat_id
+                await notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})")
 
             last_row_count = current_count
     except Exception as e:
@@ -455,67 +475,45 @@ def api_transaction(id):
         if not row_info:
             return jsonify({'success': False, 'message': 'المعاملة غير موجودة'})
         row = row_info['row']
+        old_data = row_info['data']
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
+        # تطبيق التحديثات
         for key, value in updates.items():
             if key in headers:
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
 
-        # تحديث الأعمدة V,W,X
-        employee_name = updates.get('الموظف المسؤول', 'غير معروف')
-        if 'آخر تعديل بواسطة' in headers:
-            col_v = headers.index('آخر تعديل بواسطة') + 1
-            ws.update_cell(row, col_v, employee_name)
-        else:
-            ws.update_cell(row, 22, employee_name)
-
+        # تحديث الأعمدة V,W,X (آخر تعديل)
+        employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now().isoformat()
-        if 'آخر تعديل بتاريخ' in headers:
-            col_w = headers.index('آخر تعديل بتاريخ') + 1
-            ws.update_cell(row, col_w, now)
-        else:
-            ws.update_cell(row, 23, now)
-
+        col_v = 22  # عمود V (آخر تعديل بواسطة)
+        col_w = 23  # عمود W (آخر تعديل بتاريخ)
+        col_x = 24  # عمود X (عدد التعديلات)
+        ws.update_cell(row, col_v, employee_name)
+        ws.update_cell(row, col_w, now)
         try:
-            current_count_cell = ws.cell(row, 24).value
-            current_count = int(current_count_cell) if current_count_cell and str(current_count_cell).isdigit() else 0
+            current_count = int(ws.cell(row, col_x).value or 0)
         except:
             current_count = 0
-        new_count = current_count + 1
-        if 'عدد التعديلات' in headers:
-            col_x = headers.index('عدد التعديلات') + 1
-            ws.update_cell(row, col_x, new_count)
-        else:
-            ws.update_cell(row, 24, new_count)
+        ws.update_cell(row, col_x, current_count + 1)
 
         # تسجيل في TransactionHistory
-        try:
-            history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-            if history_ws:
-                history_ws.append_row([
-                    datetime.now().isoformat(),
-                    id,
-                    f"تم تحديث الحقول: {', '.join(updates.keys())}",
-                    employee_name
-                ])
-        except Exception as e:
-            logger.error(f"فشل تسجيل التاريخ: {e}")
+        changes = ', '.join(updates.keys())
+        sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # إشعار للمدير (بدون إيميل)
-        if Config.ADMIN_CHAT_ID and background_loop and bot_app:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    bot_app.bot.send_message(
-                        chat_id=Config.ADMIN_CHAT_ID,
-                        text=f"✏️ *تحديث معاملة*\nالمعاملة: {id}\nبواسطة: {employee_name}",
-                        parse_mode='Markdown'
-                    ),
-                    background_loop
-                )
-            except Exception as e:
-                logger.error(f"فشل إرسال إشعار البوت: {e}")
+        # تحليل التأخير وإرسال إشعار
+        new_delay = updates.get('التأخير', old_data.get('التأخير'))
+        new_status = updates.get('الحالة', old_data.get('الحالة'))
+        user_message = f"✏️ *تم تحديث معاملتك {id}*\n"
+        user_message += f"الحقول المحدثة: {changes}\n"
+        if new_delay == 'نعم':
+            user_message += "⚠️ *المعاملة متأخرة!* يرجى المتابعة.\n"
+        if new_status == 'مكتملة':
+            user_message += "✅ *المعاملة مكتملة!* شكراً لاستخدامك خدماتنا.\n"
+
+        await notify_user(id, user_message)
 
         return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
@@ -536,7 +534,7 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحة التحقق (المستخدم) ------------------
+# ------------------ صفحة التحقق (للمستخدم) ------------------
 @app.route('/verify', methods=['GET'])
 def verify_page():
     name = request.args.get('name', '').strip()
@@ -585,7 +583,6 @@ def verify_page():
         else:
             return "<html dir='rtl'><body style='text-align:center;margin-top:50px;'><h2>⚠️ مشكلة في الاتصال بقاعدة البيانات</h2></body></html>"
     else:
-        # عرض النموذج العادي
         return '''
         <!DOCTYPE html>
         <html dir="rtl">
@@ -614,79 +611,112 @@ def verify_page():
         </html>
         '''
 
-# ------------------ صفحة API للتحقق (POST) للاستخدام البديل ------------------
-@app.route('/api/verify', methods=['POST'])
-def api_verify():
-    data = request.json
-    name = data.get('name', '').strip().lower()
-    phone = data.get('phone', '').strip()
+# ------------------ صفحة عرض المعاملة (للقراءة فقط) ------------------
+@app.route('/view/<id>')
+def view_transaction_page(id):
+    # نجلب البيانات من API
+    try:
+        response = requests.get(f"{Config.WEB_APP_URL}/api/transaction/{id}")
+        if response.status_code != 200:
+            return "المعاملة غير موجودة", 404
+        data = response.json()
+    except:
+        return "خطأ في الاتصال", 500
 
-    if not name or not phone:
-        return jsonify({'success': False})
+    # نجلب سجل التتبع
+    try:
+        history_response = requests.get(f"{Config.WEB_APP_URL}/api/history/{id}")
+        history = history_response.json() if history_response.status_code == 200 else []
+    except:
+        history = []
 
-    if not sheets_client:
-        return jsonify({'success': False, 'error': 'Sheets not connected'})
-
-    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-    if not ws:
-        return jsonify({'success': False})
-
-    records = ws.get_all_records()
-    for row in records:
-        row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
-        row_phone = str(row.get('رقم الهاتف', '')).strip()
-        if row_name == name and row_phone == phone:
-            transaction_id = row.get('ID')
-            if transaction_id:
-                return jsonify({
-                    'success': True,
-                    'id': transaction_id,
-                    'bot_username': Config.BOT_USERNAME
-                })
-    return jsonify({'success': False})
-
-# ------------------ صفحات QR ------------------
-@app.route('/qr/<id>')
-def qr_page(id):
-    view_link = f"{Config.WEB_APP_URL}/view/{id}"
-    qr_base64 = QRGenerator.generate_qr(view_link)
+    # إنشاء HTML لعرض البيانات
     html = f"""
     <!DOCTYPE html>
-    <html dir="rtl">
+    <html dir="rtl" lang="ar">
     <head>
         <meta charset="UTF-8">
-        <title>QR Code للمعاملة {id}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>تفاصيل المعاملة {id}</title>
+        <script src="https://cdn.tailwindcss.com"></script>
         <style>
-            body {{ display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f5f5f5; }}
-            img {{ max-width: 90%; max-height: 90%; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+            * {{ font-family: 'Inter', sans-serif; }}
+            .ios-card {{ background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }}
+            .label-ios {{ font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }}
+            .timeline-item {{ border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }}
+            .timeline-dot {{ width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }}
         </style>
     </head>
-    <body>
-        <img src="data:image/png;base64,{qr_base64}" alt="QR Code للمعاملة {id}">
+    <body class="bg-gray-100 p-4">
+        <div class="max-w-3xl mx-auto">
+            <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
+                <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span class="text-blue-600">{id}</span></h1>
+                <span class="text-gray-500 text-sm">(للمتابعة فقط)</span>
+            </div>
+
+            <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+                <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    """
+    # عرض الحقول (ما عدا الحساسة)
+    excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط']
+    for key, value in data.items():
+        if key not in excluded:
+            display_value = value if value else '-'
+            if key == 'المرافقات' and value and value.startswith('http'):
+                display_value = f'<a href="{value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>'
+            html += f"""
+                <div class="bg-gray-50 p-3 rounded-xl">
+                    <span class="label-ios">{key}</span>
+                    <div class="text-gray-900 mt-1">{display_value}</div>
+                </div>
+            """
+    html += """
+                </div>
+            </div>
+
+            <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+                <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
+                <div id="history-timeline" class="space-y-2">
+    """
+    if history:
+        for entry in history:
+            html += f"""
+                <div class="timeline-item">
+                    <span class="timeline-dot"></span>
+                    <span class="text-sm text-gray-500">{entry['time']}</span>
+                    <p class="text-gray-800">{entry['action']}</p>
+                    <p class="text-xs text-gray-400">{entry['user']}</p>
+                </div>
+            """
+    else:
+        html += '<p class="text-gray-500">لا يوجد سجل</p>'
+    html += """
+                </div>
+            </div>
+        </div>
     </body>
     </html>
     """
     return html
 
-@app.route('/qr_image/<id>')
-def qr_image(id):
-    view_link = f"{Config.WEB_APP_URL}/view/{id}"
-    qr_base64 = QRGenerator.generate_qr(view_link)
-    img_data = base64.b64decode(qr_base64)
-    return Response(img_data, mimetype='image/png')
-
-# ------------------ صفحات HTML (للعرض والتعديل) ------------------
+# ------------------ صفحات المدير ------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>المعاملات</title>
+    <title>المعاملات - لوحة التحكم</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-100 p-4">
     <div class="max-w-6xl mx-auto">
         <h1 class="text-2xl font-bold mb-4">📋 جميع المعاملات (المدير)</h1>
+        <div class="mb-4">
+            <input type="text" id="searchInput" placeholder="🔍 ابحث بـ ID أو الاسم أو الحالة..." 
+                   class="w-full p-3 border border-gray-300 rounded-xl text-right">
+        </div>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
@@ -714,6 +744,14 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
                 </tr>`;
                 tbody.innerHTML += row;
+            });
+        });
+        document.getElementById('searchInput').addEventListener('keyup', function() {
+            let filter = this.value.toLowerCase();
+            let rows = document.querySelectorAll('#transactions tr');
+            rows.forEach(row => {
+                let text = row.innerText.toLowerCase();
+                row.style.display = text.includes(filter) ? '' : 'none';
             });
         });
     </script>
@@ -919,98 +957,6 @@ EDIT_HTML = """
 </html>
 """
 
-VIEW_HTML = """
-<!DOCTYPE html>
-<html dir="rtl" lang="ar">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>تفاصيل المعاملة</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-        * { font-family: 'Inter', sans-serif; }
-        .ios-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }
-        .label-ios { font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }
-        .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }
-        .timeline-dot { width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }
-    </style>
-</head>
-<body class="bg-gray-100 p-4">
-    <div class="max-w-3xl mx-auto">
-        <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
-            <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
-            <span class="text-gray-500 text-sm">(للمتابعة فقط)</span>
-        </div>
-
-        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
-            <div id="fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
-        </div>
-
-        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
-            <div id="history-timeline" class="space-y-2"></div>
-        </div>
-    </div>
-
-    <script>
-        const id = window.location.pathname.split('/').pop();
-        document.getElementById('transaction-id').innerText = id;
-
-        fetch(`/api/transaction/${id}`)
-            .then(res => res.ok ? res.json() : Promise.reject())
-            .then(data => {
-                const fieldsDiv = document.getElementById('fields');
-                fieldsDiv.innerHTML = '';
-                const excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط'];
-                for (let key in data) {
-                    if (!excluded.includes(key)) {
-                        const value = data[key] || '-';
-                        let display = value;
-                        if (key === 'المرافقات' && value.startsWith('http')) {
-                            display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
-                        }
-                        fieldsDiv.innerHTML += `
-                            <div class="bg-gray-50 p-3 rounded-xl">
-                                <span class="label-ios">${key}</span>
-                                <div class="text-gray-900 mt-1">${display}</div>
-                            </div>
-                        `;
-                    }
-                }
-            })
-            .catch(() => {
-                document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة</div>';
-            });
-
-        function loadHistory() {
-            fetch(`/api/history/${id}`).then(r => r.json()).then(h => {
-                const t = document.getElementById('history-timeline');
-                if (h.length === 0) {
-                    t.innerHTML = '<p class="text-gray-500">لا يوجد سجل</p>';
-                    return;
-                }
-                let html = '';
-                h.forEach(i => {
-                    html += `
-                        <div class="timeline-item">
-                            <span class="timeline-dot"></span>
-                            <span class="text-sm text-gray-500">${i.time}</span>
-                            <p class="text-gray-800">${i.action}</p>
-                            <p class="text-xs text-gray-400">${i.user}</p>
-                        </div>
-                    `;
-                });
-                t.innerHTML = html;
-            });
-        }
-        loadHistory();
-    </script>
-</body>
-</html>
-"""
-
 @app.route('/')
 def index():
     return render_template_string(INDEX_HTML)
@@ -1019,9 +965,35 @@ def index():
 def edit_transaction_page(id):
     return render_template_string(EDIT_HTML)
 
-@app.route('/view/<id>')
-def view_transaction_page(id):
-    return render_template_string(VIEW_HTML)
+# ------------------ صفحات QR ------------------
+@app.route('/qr/<id>')
+def qr_page(id):
+    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    qr_base64 = QRGenerator.generate_qr(view_link)
+    html = f"""
+    <!DOCTYPE html>
+    <html dir="rtl">
+    <head>
+        <meta charset="UTF-8">
+        <title>QR Code للمعاملة {id}</title>
+        <style>
+            body {{ display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f5f5f5; }}
+            img {{ max-width: 90%; max-height: 90%; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
+        </style>
+    </head>
+    <body>
+        <img src="data:image/png;base64,{qr_base64}" alt="QR Code للمعاملة {id}">
+    </body>
+    </html>
+    """
+    return html
+
+@app.route('/qr_image/<id>')
+def qr_image(id):
+    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    qr_base64 = QRGenerator.generate_qr(view_link)
+    img_data = base64.b64decode(qr_base64)
+    return Response(img_data, mimetype='image/png')
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 8080))
