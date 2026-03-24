@@ -3,7 +3,6 @@ import logging
 import sys
 import os
 import json
-import asyncio
 import random
 import base64
 from flask import Flask, request, jsonify, render_template_string, Response, abort
@@ -55,7 +54,6 @@ def api_submit():
         attachments = attachments_text
         if uploaded_file and uploaded_file.filename:
             file_data = uploaded_file.read()
-            # تحتاج إلى دالة upload_file_to_drive في sheets_client (نفترض وجودها)
             if hasattr(sheets_client, 'upload_file_to_drive'):
                 file_link = sheets_client.upload_file_to_drive(file_data, uploaded_file.filename)
                 if file_link:
@@ -118,12 +116,8 @@ def api_submit():
             ])
             logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR")
 
-        # إضافة سجل في TransactionHistory (يجب أن تكون دالة add_history_entry موجودة)
         if hasattr(sheets_client, 'add_history_entry'):
             sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
-
-        # إشعار للمدير عبر البوت (سيتم التعامل معه لاحقاً)
-        # لا يمكن إرسال إشعار هنا لأنه لا يوجد bot_app بعد. سيتم التعامل معه عبر الوظيفة المنفصلة.
 
         return jsonify({
             'success': True,
@@ -216,15 +210,6 @@ def api_transaction(id):
         if hasattr(sheets_client, 'add_history_entry'):
             sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # إشعار للمستخدم (سيتم التعامل معه في main.py عبر البوت)
-        # لا يمكن إرسال الإشعار هنا، نمرر البيانات إلى main.py عبر المتغيرات العامة.
-
-        # سنقوم بتخزين التغيير في متغير عام ليعالج لاحقاً في main.py
-        # لكن الأفضل أن يكون هناك دالة في main.py يمكن استدعاؤها من web.py.
-        # هنا سنضيف البيانات إلى قائمة انتظار (queue) لمعالجتها في main.py.
-        # بما أننا نعيد هيكلة، سنفترض وجود متغير عام `pending_notifications` في main.py.
-        # في هذا الإصدار المبسط، سنقوم بطباعة سجل فقط، ونكتفي بذلك.
-
         return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
 @app.route('/api/history/<id>')
@@ -248,139 +233,137 @@ def api_transaction_history(id):
 @app.route('/register', methods=['GET', 'POST'])
 def register_transaction():
     if request.method == 'GET':
-        return '''
-        <!DOCTYPE html>
-        <html dir="rtl">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>تسجيل معاملة جديدة</title>
-            <style>
-                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #f5f0ff 0%, #f0f2f5 100%); margin: 0; padding: 20px; }
-                .container { max-width: 700px; margin: 20px auto; background: white; border-radius: 32px; box-shadow: 0 20px 35px -10px rgba(0,0,0,0.1); overflow: hidden; }
-                .header { background: #8b5cf6; color: white; padding: 30px; text-align: center; }
-                .header h1 { margin: 0; font-size: 28px; }
-                .header p { margin: 10px 0 0; opacity: 0.9; }
-                .content { padding: 30px; }
-                .form-group { margin-bottom: 20px; }
-                label { display: block; margin-bottom: 8px; font-weight: 600; color: #1f2937; }
-                input, select, textarea { width: 100%; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 16px; font-size: 16px; transition: all 0.2s; background: #f9fafb; }
-                input:focus, select:focus, textarea:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); background: white; }
-                button { background: #8b5cf6; color: white; border: none; padding: 14px 24px; font-size: 18px; font-weight: 600; border-radius: 40px; width: 100%; cursor: pointer; transition: 0.2s; margin-top: 10px; }
-                button:hover { background: #7c3aed; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,92,246,0.3); }
-                .required:after { content: " *"; color: #ef4444; }
-                .info-box { background: #f3f4f6; border-radius: 20px; padding: 15px; margin-bottom: 20px; font-size: 14px; color: #4b5563; text-align: center; }
-                .result { margin-top: 20px; padding: 15px; border-radius: 20px; background: #f9fafb; display: none; }
-                .result.success { background: #d1fae5; color: #065f46; display: block; }
-                .result.error { background: #fee2e2; color: #991b1b; display: block; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>📝 تسجيل معاملة جديدة</h1>
-                    <p>املأ البيانات التالية لتسجيل معاملتك</p>
-                </div>
-                <div class="content">
-                    <div class="info-box">
-                        💡 بعد إرسال المعاملة، سيتم إنشاء رقم معاملة فريد وستحصل على رابط لمتابعة المعاملة عبر البوت.
-                    </div>
-                    <form id="transactionForm" enctype="multipart/form-data">
-                        <div class="form-group">
-                            <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
-                        </div>
-                        <div class="form-group">
-                            <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
-                        </div>
-                        <div class="form-group">
-                            <label class="required">الوظيفة</label>
-                            <select id="function" name="function" required>
-                                <option value="طالب">طالب</option>
-                                <option value="تدريسي">تدريسي</option>
-                                <option value="أخرى">أخرى</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="required">القسم</label>
-                            <select id="department" name="department" required>
-                                <option value="قسم تكنولوجيا المعلومات و الإتصالات">قسم تكنولوجيا المعلومات و الإتصالات</option>
-                                <option value="قسم التقنيات الكهربائية">قسم التقنيات الكهربائية</option>
-                                <option value="قسم تقنيات المكائن والمعدات">قسم تقنيات المكائن والمعدات</option>
-                                <option value="قسم التقنيات الميكانيكية">قسم التقنيات الميكانيكية</option>
-                                <option value="قسم التقنيات الإلكترونية">قسم التقنيات الإلكترونية</option>
-                                <option value="قسم تقنيات الصناعات الكيمياوية">قسم تقنيات الصناعات الكيمياوية</option>
-                                <option value="قسم تقنيات المساحة">قسم تقنيات المساحة</option>
-                                <option value="قسم تقنيات الموارد المائية">قسم تقنيات الموارد المائية</option>
-                                <option value="قسم تقنيات الأجهزة الطبية">قسم تقنيات الأجهزة الطبية</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>نوع المعاملة</label>
-                            <input type="text" id="transaction_type" name="transaction_type" placeholder="مثال: تتبع، استعلام، شكوى، اقتراح">
-                        </div>
-                        <div class="form-group">
-                            <label>المرافقات (نص)</label>
-                            <textarea id="attachments_text" name="attachments_text" rows="2" placeholder="أي ملاحظات إضافية..."></textarea>
-                        </div>
-                        <div class="form-group">
-                            <label>رفع ملف (اختياري)</label>
-                            <input type="file" id="attachment_file" name="attachment_file" accept="*/*">
-                            <small style="color:#6c757d;">يمكنك رفع صورة، PDF، مستند... سيتم رفع الملف إلى Google Drive وسيظهر الرابط في المرافقات.</small>
-                        </div>
-                        <button type="submit" id="submitBtn">إرسال المعاملة</button>
-                    </form>
-                    <div id="result" class="result"></div>
-                </div>
+        return '''<!DOCTYPE html>
+<html dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تسجيل معاملة جديدة</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #f5f0ff 0%, #f0f2f5 100%); margin: 0; padding: 20px; }
+        .container { max-width: 700px; margin: 20px auto; background: white; border-radius: 32px; box-shadow: 0 20px 35px -10px rgba(0,0,0,0.1); overflow: hidden; }
+        .header { background: #8b5cf6; color: white; padding: 30px; text-align: center; }
+        .header h1 { margin: 0; font-size: 28px; }
+        .header p { margin: 10px 0 0; opacity: 0.9; }
+        .content { padding: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #1f2937; }
+        input, select, textarea { width: 100%; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 16px; font-size: 16px; transition: all 0.2s; background: #f9fafb; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); background: white; }
+        button { background: #8b5cf6; color: white; border: none; padding: 14px 24px; font-size: 18px; font-weight: 600; border-radius: 40px; width: 100%; cursor: pointer; transition: 0.2s; margin-top: 10px; }
+        button:hover { background: #7c3aed; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,92,246,0.3); }
+        .required:after { content: " *"; color: #ef4444; }
+        .info-box { background: #f3f4f6; border-radius: 20px; padding: 15px; margin-bottom: 20px; font-size: 14px; color: #4b5563; text-align: center; }
+        .result { margin-top: 20px; padding: 15px; border-radius: 20px; background: #f9fafb; display: none; }
+        .result.success { background: #d1fae5; color: #065f46; display: block; }
+        .result.error { background: #fee2e2; color: #991b1b; display: block; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📝 تسجيل معاملة جديدة</h1>
+            <p>املأ البيانات التالية لتسجيل معاملتك</p>
+        </div>
+        <div class="content">
+            <div class="info-box">
+                💡 بعد إرسال المعاملة، سيتم إنشاء رقم معاملة فريد وستحصل على رابط لمتابعة المعاملة عبر البوت.
             </div>
-            <script>
-                document.getElementById('transactionForm').addEventListener('submit', async (e) => {
-                    e.preventDefault();
-                    const submitBtn = document.getElementById('submitBtn');
-                    const resultDiv = document.getElementById('result');
-                    
-                    submitBtn.disabled = true;
-                    const originalText = submitBtn.textContent;
-                    submitBtn.textContent = 'جاري الإرسال...';
-                    resultDiv.innerHTML = '<div>جاري التسجيل...</div>';
-                    resultDiv.className = 'result';
+            <form id="transactionForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label class="required">الاسم الثلاثي</label>
+                    <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
+                </div>
+                <div class="form-group">
+                    <label class="required">رقم الهاتف</label>
+                    <input type="text" id="phone" name="phone" required placeholder="07712345678">
+                </div>
+                <div class="form-group">
+                    <label class="required">الوظيفة</label>
+                    <select id="function" name="function" required>
+                        <option value="طالب">طالب</option>
+                        <option value="تدريسي">تدريسي</option>
+                        <option value="أخرى">أخرى</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="required">القسم</label>
+                    <select id="department" name="department" required>
+                        <option value="قسم تكنولوجيا المعلومات و الإتصالات">قسم تكنولوجيا المعلومات و الإتصالات</option>
+                        <option value="قسم التقنيات الكهربائية">قسم التقنيات الكهربائية</option>
+                        <option value="قسم تقنيات المكائن والمعدات">قسم تقنيات المكائن والمعدات</option>
+                        <option value="قسم التقنيات الميكانيكية">قسم التقنيات الميكانيكية</option>
+                        <option value="قسم التقنيات الإلكترونية">قسم التقنيات الإلكترونية</option>
+                        <option value="قسم تقنيات الصناعات الكيمياوية">قسم تقنيات الصناعات الكيمياوية</option>
+                        <option value="قسم تقنيات المساحة">قسم تقنيات المساحة</option>
+                        <option value="قسم تقنيات الموارد المائية">قسم تقنيات الموارد المائية</option>
+                        <option value="قسم تقنيات الأجهزة الطبية">قسم تقنيات الأجهزة الطبية</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>نوع المعاملة</label>
+                    <input type="text" id="transaction_type" name="transaction_type" placeholder="مثال: تتبع، استعلام، شكوى، اقتراح">
+                </div>
+                <div class="form-group">
+                    <label>المرافقات (نص)</label>
+                    <textarea id="attachments_text" name="attachments_text" rows="2" placeholder="أي ملاحظات إضافية..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label>رفع ملف (اختياري)</label>
+                    <input type="file" id="attachment_file" name="attachment_file" accept="*/*">
+                    <small style="color:#6c757d;">يمكنك رفع صورة، PDF، مستند... سيتم رفع الملف إلى Google Drive وسيظهر الرابط في المرافقات.</small>
+                </div>
+                <button type="submit" id="submitBtn">إرسال المعاملة</button>
+            </form>
+            <div id="result" class="result"></div>
+        </div>
+    </div>
+    <script>
+        document.getElementById('transactionForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = document.getElementById('submitBtn');
+            const resultDiv = document.getElementById('result');
+            
+            submitBtn.disabled = true;
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = 'جاري الإرسال...';
+            resultDiv.innerHTML = '<div>جاري التسجيل...</div>';
+            resultDiv.className = 'result';
 
-                    try {
-                        const formData = new FormData(e.target);
-                        const res = await fetch('/api/submit', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const json = await res.json();
-                        if (json.success) {
-                            resultDiv.innerHTML = `
-                                <div style="text-align:center;">
-                                    ✅ تم تسجيل المعاملة بنجاح<br>
-                                    🆔 رقم المعاملة: <strong style="font-size:1.2em;">${json.id}</strong><br><br>
-                                    <a href="${json.view_link}" target="_blank" style="background:#8b5cf6; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">🔗 عرض التفاصيل</a>
-                                    <a href="${json.deep_link}" target="_blank" style="background:#2c3e50; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">📱 فتح البوت</a>
-                                    <p style="margin-top:15px; font-size:13px;">احتفظ برقم المعاملة لمتابعة معاملتك.</p>
-                                </div>
-                            `;
-                            resultDiv.classList.add('success');
-                        } else {
-                            resultDiv.innerHTML = `❌ فشل التسجيل: ${json.error || 'خطأ غير معروف'}`;
-                            resultDiv.classList.add('error');
-                            submitBtn.disabled = false;
-                            submitBtn.textContent = originalText;
-                        }
-                    } catch (err) {
-                        resultDiv.innerHTML = '❌ خطأ في الاتصال بالخادم';
-                        resultDiv.classList.add('error');
-                        submitBtn.disabled = false;
-                        submitBtn.textContent = originalText;
-                    }
+            try {
+                const formData = new FormData(e.target);
+                const res = await fetch('/api/submit', {
+                    method: 'POST',
+                    body: formData
                 });
-            </script>
-        </body>
-        </html>
-        '''
+                const json = await res.json();
+                if (json.success) {
+                    resultDiv.innerHTML = `
+                        <div style="text-align:center;">
+                            ✅ تم تسجيل المعاملة بنجاح<br>
+                            🆔 رقم المعاملة: <strong style="font-size:1.2em;">${json.id}</strong><br><br>
+                            <a href="${json.view_link}" target="_blank" style="background:#8b5cf6; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">🔗 عرض التفاصيل</a>
+                            <a href="${json.deep_link}" target="_blank" style="background:#2c3e50; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">📱 فتح البوت</a>
+                            <p style="margin-top:15px; font-size:13px;">احتفظ برقم المعاملة لمتابعة معاملتك.</p>
+                        </div>
+                    `;
+                    resultDiv.classList.add('success');
+                } else {
+                    resultDiv.innerHTML = `❌ فشل التسجيل: ${json.error || 'خطأ غير معروف'}`;
+                    resultDiv.classList.add('error');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = originalText;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = '❌ خطأ في الاتصال بالخادم';
+                resultDiv.classList.add('error');
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
+            }
+        });
+    </script>
+</body>
+</html>'''
     else:
         return "Use /api/submit", 405
 
@@ -625,7 +608,6 @@ def view_transaction_page(id):
         logger.error(f"🔥 خطأ في عرض المعاملة {id}: {e}", exc_info=True)
         return f"حدث خطأ أثناء تحميل الصفحة: {str(e)}", 500
 
-# قالب تعديل المعاملة (مختصر للاختصار)
 EDIT_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -869,7 +851,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                    </tr>
+                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
              </table>
@@ -955,19 +937,3 @@ def qr_image(id):
     qr_base64 = QRGenerator.generate_qr(view_link)
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
-
-# ------------------ Webhook ------------------
-# يجب أن يكون هذا المسار متاحاً لتلقي تحديثات البوت
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    # سيتم استدعاؤه من main.py حيث يتم تمرير bot_app و background_loop
-    # سنقوم باستيرادهما من main.py (لكن لتجنب الاستيراد الدائري، سنعتمد على متغيرات عامة)
-    # سنقوم بإنشاء متغيرات عامة في main.py ونستوردها هنا.
-    # في هذا الملف سنقوم فقط بتعريف المسار، وسيتم استدعاؤه من main.py.
-    # بما أننا نريد تقسيم الملفات، سنقوم بنقل هذا المسار إلى main.py.
-    # لكن للبساطة، سنتركه هنا ونستخدم متغيرات من main.py.
-    # سنقوم بإنشاء متغير عام في main.py ونستورده هنا.
-    # سنستخدم `from main import bot_app, background_loop` (سيؤدي إلى استيراد دائري).
-    # لذلك الأفضل نقل هذا المسار إلى main.py نفسه.
-    # سنقوم بذلك في main.py.
-    pass

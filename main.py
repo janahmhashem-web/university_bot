@@ -5,14 +5,10 @@ import logging
 import threading
 import time
 import asyncio
-import random
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
-
-from flask import Flask, request, jsonify, render_template_string, Response, abort
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-import requests
 
 from sheets import GoogleSheetsClient
 from config import Config
@@ -370,26 +366,6 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = await ai_assistant.get_response(user_message, user_id, user_name)
     await update.message.reply_text(response)
 
-# ------------------ مراقبة المعاملات الجديدة (اختياري) ------------------
-# يمكن إضافة حلقة تراقب إضافة صفوف جديدة في شيت manager وتقوم بإرسال إشعارات
-# هنا سنقوم بإضافة حلقة بسيطة للتوضيح
-
-def check_new_transactions():
-    """تفحص دورياً لإضافة معاملات جديدة وإرسال إشعارات للمدير أو للمستخدمين"""
-    # ستقوم بتنفيذ هذا لاحقاً حسب الحاجة
-    pass
-
-def monitoring_loop():
-    """حلقة مراقبة دورية"""
-    logger.info("🔄 بدء حلقة المراقبة (كل 10 ثوانٍ)")
-    while True:
-        try:
-            # تنفيذ check_new_transactions
-            pass
-        except Exception as e:
-            logger.error(f"خطأ في حلقة المراقبة: {e}")
-        time.sleep(10)
-
 # ------------------ إعداد البوت ------------------
 def setup_bot():
     global bot_app, background_loop
@@ -471,7 +447,16 @@ def setup_bot():
         else:
             logger.warning("⚠️ لم يتم تعيين webhook تلقائياً، يمكنك تعيينه يدوياً.")
 
-        # بدء حلقة المراقبة
+        # بدء حلقة مراقبة بسيطة
+        def monitoring_loop():
+            logger.info("🔄 بدء حلقة المراقبة اليدوية (كل 10 ثوانٍ)")
+            while True:
+                try:
+                    # يمكنك إضافة منطق مراقبة المعاملات الجديدة هنا
+                    pass
+                except Exception as e:
+                    logger.error(f"خطأ في حلقة المراقبة: {e}")
+                time.sleep(10)
         monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
         monitoring_thread.start()
         logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات (كل 10 ثوانٍ)")
@@ -479,8 +464,7 @@ def setup_bot():
         logger.error(f"❌ فشل إعداد البوت: {e}", exc_info=True)
         bot_app = None
 
-# ------------------ Webhook endpoint في Flask ------------------
-# يجب أن يكون المسار /webhook متاحاً في Flask، لذلك نضيفه هنا باستخدام الديكور
+# ------------------ إضافة مسار webhook إلى Flask app ------------------
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if bot_app is None or background_loop is None:
@@ -500,6 +484,6 @@ if __name__ == "__main__":
     # بدء البوت في خلفية
     bot_thread = threading.Thread(target=setup_bot, daemon=True)
     bot_thread.start()
-    # تشغيل خادم Flask (يستخدم gunicorn في الإنتاج، لكن للتشغيل المحلي نستخدم app.run)
+    # تشغيل خادم Flask (يستخدم gunicorn في الإنتاج)
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
