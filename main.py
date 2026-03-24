@@ -1,20 +1,18 @@
 #!/usr/bin/env python
-import os
-import sys
 import logging
+import sys
+import os
+import asyncio
 import threading
 import time
-import asyncio
-from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-from sheets import GoogleSheetsClient
 from config import Config
-from qr_generator import QRGenerator
-from ai_handler import AIAssistant
-from web import app  # استيراد تطبيق Flask من web.py
+from wap import app, sheets_client, ai_assistant, notify_user, save_user_chat, background_loop, bot_app
+from wap import bot_app as wap_bot_app  # سيتم تعيينه لاحقاً
+from wap import background_loop as wap_background_loop
 
 # ------------------ إعداد التسجيل ------------------
 logging.basicConfig(
@@ -24,66 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ------------------ Google Sheets ------------------
-try:
-    sheets_client = GoogleSheetsClient()
-    logger.info("✅ تم الاتصال بـ Google Sheets")
-except Exception as e:
-    logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
-    sheets_client = None
-
-# ------------------ الذكاء الاصطناعي ------------------
-try:
-    ai_assistant = AIAssistant()
-    logger.info("✅ تم تهيئة Groq AI")
-except Exception as e:
-    logger.error(f"❌ فشل تهيئة Groq AI: {e}")
-    ai_assistant = None
-
-# ------------------ متغيرات عامة للبوت ------------------
-bot_app = None
-background_loop = None
-
-# ------------------ دوال مساعدة ------------------
-async def notify_user(transaction_id, message):
-    """إرسال إشعار للمستخدم المرتبط بالمعاملة عبر البوت"""
-    if not sheets_client or not bot_app or not background_loop:
-        return
-    try:
-        ws = sheets_client.get_worksheet(Config.SHEET_USERS)
-        if not ws:
-            return
-        records = ws.get_all_records()
-        for row in records:
-            if str(row.get('transaction_id')) == str(transaction_id):
-                chat_id = row.get('chat_id')
-                if chat_id:
-                    await bot_app.bot.send_message(
-                        chat_id=int(chat_id),
-                        text=message,
-                        parse_mode='Markdown'
-                    )
-                break
-    except Exception as e:
-        logger.error(f"فشل إرسال إشعار للمستخدم: {e}")
-
-def save_user_chat(transaction_id, chat_id):
-    """حفظ chat_id في ورقة users"""
-    try:
-        ws = sheets_client.get_worksheet(Config.SHEET_USERS)
-        if not ws:
-            ws = sheets_client.spreadsheet.add_worksheet(title=Config.SHEET_USERS, rows=1, cols=2)
-            ws.append_row(['transaction_id', 'chat_id'])
-        records = ws.get_all_records()
-        for i, row in enumerate(records):
-            if str(row.get('transaction_id')) == transaction_id:
-                ws.update_cell(i+2, 2, str(chat_id))
-                return
-        ws.append_row([transaction_id, str(chat_id)])
-    except Exception as e:
-        logger.error(f"فشل حفظ ربط المستخدم: {e}")
-
-# ------------------ دوال البوت ------------------
+# ------------------ دوال البوت الأساسية ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -106,74 +45,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
 
+    # أزرار عادية تظهر أسفل شريط الكتابة
     keyboard = [
-        [InlineKeyboardButton("🔍 تفاصيل معاملة", callback_data="cmd_id")],
-        [InlineKeyboardButton("📜 سجل تتبع معاملة", callback_data="cmd_history")],
-        [InlineKeyboardButton("📱 تعليمات QR", callback_data="cmd_qr")],
-        [InlineKeyboardButton("💬 التواصل مع الدعم", callback_data="cmd_support")],
-        [InlineKeyboardButton("📊 تحليل معاملة", callback_data="cmd_analyze")],
+        [KeyboardButton("/id")],
+        [KeyboardButton("/history")],
+        [KeyboardButton("/qr")],
+        [KeyboardButton("/support")],
+        [KeyboardButton("/analyze")],
     ]
     if is_admin:
-        keyboard.append([InlineKeyboardButton("📊 إحصائيات", callback_data="cmd_stats")])
+        keyboard.append([KeyboardButton("/stats")])
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
-    msg += "يمكنك استخدام الأزرار أدناه للوصول إلى الخدمات بسهولة:\n"
+    msg += "يمكنك استخدام الأزرار أدناه لتنفيذ الأوامر مباشرة:\n"
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
-
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data == "cmd_id":
-        await query.edit_message_text(
-            "📌 أرسل رقم المعاملة (ID) لمعرفة تفاصيلها.\n\n"
-            "مثال: `/id MUT-20260324123456-1234`",
-            parse_mode='Markdown'
-        )
-    elif data == "cmd_history":
-        await query.edit_message_text(
-            "📌 أرسل رقم المعاملة (ID) لمعرفة سجل تتبعها.\n\n"
-            "مثال: `/history MUT-20260324123456-1234`",
-            parse_mode='Markdown'
-        )
-    elif data == "cmd_qr":
-        await query.edit_message_text(
-            "📱 *كيفية استخدام رمز QR لتتبع المعاملة*\n\n"
-            "1️⃣ قم بطباعة رمز QR الموجود في صفحة المعاملة.\n"
-            "2️⃣ الصق الورقة مع المعاملة في مكان واضح.\n"
-            "3️⃣ عند مسح الرمز، ستظهر صفحة التتبع.\n"
-            "4️⃣ يمكن لأي شخص لديه الرابط متابعة المعاملة.\n\n"
-            "💡 *نصيحة:* احتفظ بالورقة في ملف المعاملة لتسهيل التتبع.",
-            parse_mode='Markdown'
-        )
-    elif data == "cmd_support":
-        await query.edit_message_text(
-            "📨 لإرسال رسالة إلى فريق الدعم، استخدم الأمر `/support`.\n"
-            "سنتواصل معك في أقرب وقت.",
-            parse_mode='Markdown'
-        )
-    elif data == "cmd_analyze":
-        await query.edit_message_text(
-            "📊 أرسل رقم المعاملة (ID) لتحليلها.\n\n"
-            "مثال: `/analyze MUT-20260324123456-1234`",
-            parse_mode='Markdown'
-        )
-    elif data == "cmd_stats":
-        user_id = update.effective_user.id
-        if user_id != Config.ADMIN_CHAT_ID:
-            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
-            return
-        if not sheets_client:
-            await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
-            return
-        records = sheets_client.get_all_records(Config.SHEET_MANAGER)
-        total = len(records)
-        completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
-        pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
-        msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
-        await query.edit_message_text(msg, parse_mode='Markdown')
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -366,13 +252,11 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response = await ai_assistant.get_response(user_message, user_id, user_name)
     await update.message.reply_text(response)
 
-# ------------------ إعداد البوت ------------------
-def setup_bot():
-    global bot_app, background_loop
-    logger.info("🚀 بدء setup_bot")
-    if not Config.TELEGRAM_BOT_TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN غير موجود")
-        return
+# ------------------ إعداد البوت وحلقة الأحداث ------------------
+bot_app = None
+background_loop = None
+
+if Config.TELEGRAM_BOT_TOKEN:
     try:
         bot_app = Application.builder().token(Config.TELEGRAM_BOT_TOKEN).build()
         bot_app.add_handler(CommandHandler("start", start))
@@ -384,106 +268,41 @@ def setup_bot():
         bot_app.add_handler(CommandHandler("qr", qr_command))
         bot_app.add_handler(CommandHandler("support", support_command))
         bot_app.add_handler(CommandHandler("analyze", analyze))
-        bot_app.add_handler(CallbackQueryHandler(button_callback))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
-        async def init_bot_async():
-            logger.info("🔄 تهيئة البوت في الحلقة غير المتزامنة...")
+        async def init_bot():
             await bot_app.initialize()
             logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
 
         def start_background_loop():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(init_bot_async())
             global background_loop
-            background_loop = loop
-            logger.info("🔄 بدء حلقة الأحداث الخلفية...")
-            loop.run_forever()
+            background_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(background_loop)
+            background_loop.run_until_complete(init_bot())
+            background_loop.run_forever()
 
-        thread = threading.Thread(target=start_background_loop, daemon=True)
-        thread.start()
+        loop_thread = threading.Thread(target=start_background_loop, daemon=True)
+        loop_thread.start()
         logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
-        time.sleep(3)
-        logger.info("✅ خلفية البوت تعمل")
-
-        # تعيين webhook
-        def set_webhook_sync():
-            if bot_app is None or not Config.WEB_APP_URL:
-                return
-            webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
-            token = Config.TELEGRAM_BOT_TOKEN
-            try:
-                del_resp = requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook", timeout=10)
-                if del_resp.status_code == 200:
-                    logger.info("✅ تم حذف webhook القديم")
-                else:
-                    logger.warning(f"⚠️ فشل حذف webhook القديم: {del_resp.text}")
-
-                resp = requests.post(
-                    f"https://api.telegram.org/bot{token}/setWebhook",
-                    data={"url": webhook_url},
-                    timeout=10
-                )
-                if resp.status_code == 200 and resp.json().get("ok"):
-                    logger.info(f"✅ Webhook set to {webhook_url}")
-                else:
-                    logger.error(f"❌ فشل تعيين webhook: {resp.text}")
-            except Exception as e:
-                logger.error(f"❌ خطأ في تعيين webhook: {e}")
-
         time.sleep(2)
-        logger.info("🌐 محاولة تعيين webhook...")
-        for attempt in range(1, 4):
-            try:
-                set_webhook_sync()
-                logger.info("✅ تم تعيين webhook بنجاح.")
-                break
-            except Exception as e:
-                logger.error(f"❌ محاولة {attempt} فشلت: {e}")
-                if attempt < 3:
-                    time.sleep(5)
-        else:
-            logger.warning("⚠️ لم يتم تعيين webhook تلقائياً، يمكنك تعيينه يدوياً.")
 
-        # بدء حلقة مراقبة بسيطة
-        def monitoring_loop():
-            logger.info("🔄 بدء حلقة المراقبة اليدوية (كل 10 ثوانٍ)")
-            while True:
-                try:
-                    # يمكنك إضافة منطق مراقبة المعاملات الجديدة هنا
-                    pass
-                except Exception as e:
-                    logger.error(f"خطأ في حلقة المراقبة: {e}")
-                time.sleep(10)
-        monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
-        monitoring_thread.start()
-        logger.info("🔍 بدأت مراقبة المعاملات الجديدة والتحديثات (كل 10 ثوانٍ)")
+        # تعيين المتغيرات في wap.py
+        import wap
+        wap.bot_app = bot_app
+        wap.background_loop = background_loop
     except Exception as e:
-        logger.error(f"❌ فشل إعداد البوت: {e}", exc_info=True)
+        logger.error(f"❌ فشل إعداد البوت: {e}")
         bot_app = None
 
-# ------------------ إضافة مسار webhook إلى Flask app ------------------
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if bot_app is None or background_loop is None:
-        return "Bot not initialized", 500
-    try:
-        logger.info("📩 تم استقبال طلب webhook")
-        json_str = request.get_data(as_text=True)
-        update = Update.de_json(json.loads(json_str), bot_app.bot)
-        asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
-        return "OK"
-    except Exception as e:
-        logger.error(f"خطأ في webhook: {e}")
-        return "Error", 500
+# ------------------ Webhook (يتم استيراده من wap.py) ------------------
+# نقطة /webhook موجودة بالفعل في wap.py، لكننا نحتاج إلى استدعاء set_webhook_sync بعد بدء التطبيق.
+# نقوم بذلك في wap.py عبر الدالة delayed_webhook.
+# سيبقى webhook في wap.py ويعمل بشكل طبيعي.
 
-# ------------------ تشغيل الخادم ------------------
+# ------------------ تشغيل التطبيق ------------------
 if __name__ == "__main__":
-    # بدء البوت في خلفية
-    bot_thread = threading.Thread(target=setup_bot, daemon=True)
-    bot_thread.start()
-    # تشغيل خادم Flask (يستخدم gunicorn في الإنتاج)
+    # عند التشغيل المباشر، نقوم بتشغيل Flask app
+    from wap import app
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)

@@ -1,6 +1,6 @@
 import os
-import logging
 from groq import Groq
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -8,10 +8,9 @@ class AIAssistant:
     def __init__(self):
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
-            raise ValueError("GROQ_API_KEY غير موجود في متغيرات البيئة")
-        # تهيئة العميل بالطريقة الصحيحة (لا توجد وسيطات غير مدعومة)
+            raise ValueError("GROQ_API_KEY not set")
+        # في الإصدار 0.4.0، لا يتم تمرير proxies
         self.client = Groq(api_key=api_key)
-        # استخدام نموذج مناسب (يمكن تغييره حسب الحاجة)
         self.model = "mixtral-8x7b-32768"
 
     async def get_response(self, user_message, user_id, user_name):
