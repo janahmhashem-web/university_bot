@@ -39,16 +39,7 @@ except Exception as e:
     sheets_client = None
 
 app = Flask(__name__)
-@app.route('/debug-sheet')
-def debug_sheet():
-    if not sheets_client:
-        return "sheets_client not ready"
-    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-    if not ws:
-        return "worksheet not found"
-    headers = ws.row_values(1)
-    rows = ws.get_all_values()[1:4]  # أول 3 صفوف بعد الرأس
-    return f"Headers: {headers}<br>First rows: {rows}"
+
 # ------------------ الذكاء الاصطناعي ------------------
 try:
     ai_assistant = AIAssistant()
@@ -59,7 +50,6 @@ except Exception as e:
 
 # ------------------ دوال مساعدة ------------------
 async def notify_user(transaction_id, message):
-    """إرسال إشعار للمستخدم المرتبط بالمعاملة عبر البوت"""
     if not sheets_client or not bot_app or not background_loop:
         return
     try:
@@ -81,7 +71,6 @@ async def notify_user(transaction_id, message):
         logger.error(f"فشل إرسال إشعار للمستخدم: {e}")
 
 def save_user_chat(transaction_id, chat_id):
-    """حفظ chat_id في ورقة users"""
     try:
         ws = sheets_client.get_worksheet(Config.SHEET_USERS)
         if not ws:
@@ -121,7 +110,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
 
-    # الرسالة الترحيبية العادية
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
     msg += "📌 *للاستفادة من البوت:*\n"
     msg += "🔹 `/id [رقم]` - تفاصيل معاملة\n"
@@ -246,14 +234,12 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name or ""
-    # إرسال رسالة للمدير
     if Config.ADMIN_CHAT_ID:
         await context.bot.send_message(
             chat_id=Config.ADMIN_CHAT_ID,
             text=f"📩 *رسالة دعم جديدة*\nمن: {user_name} (ID: {user_id})\n\nلطلب مساعدة، يرجى الرد عليه مباشرة.",
             parse_mode='Markdown'
         )
-    # رد للمستخدم
     await update.message.reply_text(
         "📨 تم إرسال طلبك إلى فريق الدعم. سيتم الرد عليك في أقرب وقت.\n"
         "شكراً لتواصلك معنا."
@@ -606,7 +592,6 @@ def api_transaction(id):
 
         user_message += f"\n🔍 لمتابعة كل التغييرات: `/history {id}`"
 
-        # إرسال الإشعار الذكي للمستخدم
         if background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
                 notify_user(id, user_message),
@@ -643,8 +628,10 @@ def verify_page():
         if ws:
             records = ws.get_all_records()
             for row in records:
+                # تنظيف البيانات: إزالة المسافات الزائدة وتحويل إلى نص
                 row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
                 row_phone = str(row.get('رقم الهاتف', '')).strip()
+                # قارن الاسم والهاتف بعد التنظيف
                 if row_name == name.lower() and row_phone == phone:
                     transaction_id = row.get('ID')
                     if transaction_id:
@@ -1066,6 +1053,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
+                    发展
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
@@ -1074,7 +1062,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+            </table>
         </div>
     </div>
     <script>
