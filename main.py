@@ -39,21 +39,7 @@ except Exception as e:
     sheets_client = None
 
 app = Flask(__name__)
-@app.route('/debug-rows')
-def debug_rows():
-    if not sheets_client:
-        return "sheets_client not ready"
-    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-    if not ws:
-        return "worksheet not found"
-    records = ws.get_all_records()
-    # عرض أول 5 صفوف مع التركيز على الاسم والهاتف
-    output = []
-    for i, row in enumerate(records[:5]):
-        name = row.get('اسم صاحب المعاملة الثلاثي', '')
-        phone = row.get('رقم الهاتف', '')
-        output.append(f"Row {i+2}: name='{name}', phone='{phone}'")
-    return "<br>".join(output)
+
 # ------------------ الذكاء الاصطناعي ------------------
 try:
     ai_assistant = AIAssistant()
@@ -102,6 +88,108 @@ def save_user_chat(transaction_id, chat_id):
         ws.append_row([transaction_id, str(chat_id)])
     except Exception as e:
         logger.error(f"فشل حفظ ربط المستخدم: {e}")
+
+# ------------------ نقطة استقبال النموذج (توليد ID فوري) ------------------
+@app.route('/api/submit', methods=['POST'])
+def api_submit():
+    """استقبال البيانات من Google Forms، توليد ID، حفظ في الشيت، إعادة الروابط"""
+    try:
+        data = request.json
+        name = data.get('name', '').strip()
+        phone = data.get('phone', '').strip()
+        email = data.get('email', '').strip()
+        timestamp = data.get('timestamp', datetime.now().isoformat())
+
+        if not name or not phone:
+            return jsonify({'success': False, 'error': 'الاسم والهاتف مطلوبان'}), 400
+
+        if not sheets_client:
+            return jsonify({'success': False, 'error': 'النظام غير متصل بقاعدة البيانات'}), 500
+
+        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+        if not ws:
+            return jsonify({'success': False, 'error': 'ورقة manager غير موجودة'}), 500
+
+        # توليد ID
+        now = datetime.now()
+        date_str = now.strftime("%Y%m%d%H%M%S")
+        random_part = random.randint(1000, 9999)
+        transaction_id = f"MUT-{date_str}-{random_part}"
+
+        # الحصول على العناوين لتحديد عدد الأعمدة
+        headers = ws.row_values(1)
+        # إنشاء صف جديد بطول مناسب
+        new_row = [''] * len(headers)
+        # ملء الحقول الأساسية حسب الأعمدة المعروفة
+        for idx, header in enumerate(headers):
+            if header == 'Timestamp':
+                new_row[idx] = timestamp
+            elif header == 'اسم صاحب المعاملة الثلاثي':
+                new_row[idx] = name
+            elif header == 'رقم الهاتف':
+                new_row[idx] = phone
+            elif header == 'البريد الإلكتروني':
+                new_row[idx] = email
+            elif header == 'ID':
+                new_row[idx] = transaction_id
+        # إضافة الصف
+        ws.append_row(new_row)
+
+        # تحديث العمود U (21) برابط التعديل (للموظف)
+        last_row = len(ws.get_all_values())
+        edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
+        hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
+        try:
+            ws.update_cell(last_row, 21, hyperlink_formula)
+        except:
+            pass
+
+        # إدراج صف في شيت QR
+        qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
+        if qr_ws:
+            view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+            qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
+            qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
+            qr_ws.append_row([
+                name,
+                email,
+                transaction_id,
+                view_link,
+                qr_image_url,
+                qr_page_link,
+                edit_link
+            ])
+            new_qr_row = len(qr_ws.get_all_values())
+            qr_ws.update_cell(new_qr_row, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
+            qr_ws.update_cell(new_qr_row, 5, f'=IMAGE("{qr_image_url}")')
+            qr_ws.update_cell(new_qr_row, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
+            qr_ws.update_cell(new_qr_row, 7, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
+
+        # تسجيل في TransactionHistory
+        sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
+
+        # إشعار للمسؤول
+        if Config.ADMIN_CHAT_ID and background_loop and bot_app:
+            asyncio.run_coroutine_threadsafe(
+                bot_app.bot.send_message(
+                    chat_id=Config.ADMIN_CHAT_ID,
+                    text=f"🆕 *معاملة جديدة*\nالاسم: {name}\nالهاتف: {phone}\nID: {transaction_id}",
+                    parse_mode='Markdown'
+                ),
+                background_loop
+            )
+
+        # إعادة الروابط للمستخدم
+        return jsonify({
+            'success': True,
+            'id': transaction_id,
+            'view_link': f"{Config.WEB_APP_URL}/view/{transaction_id}",
+            'deep_link': f"https://t.me/{Config.BOT_USERNAME}?start={transaction_id}"
+        })
+
+    except Exception as e:
+        logger.error(f"خطأ في /api/submit: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ------------------ دوال البوت الأساسية ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -381,118 +469,52 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة ------------------
+# ------------------ مراقبة المعاملات الجديدة (احتياطي - لا تولد ID) ------------------
 last_row_count = 0
 
 def check_new_transactions():
     global last_row_count
     try:
         if not sheets_client:
-            logger.warning("⏳ sheets_client غير متصل، تخطي الدورة")
             return
-
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
-            logger.error("❌ لا يمكن الوصول إلى ورقة manager")
             return
-
         records = ws.get_all_records()
         current_count = len(records)
-        logger.info(f"📊 عدد السجلات الحالي: {current_count}, آخر عدد معروف: {last_row_count}")
-
         if current_count > last_row_count:
-            logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
+            # فقط نكمل الإجراءات التي قد تكون فاتت (مثل كتابة رابط التعديل)
             for i in range(last_row_count, current_count):
                 row_number = i + 2
                 new_row = records[i]
-
-                # التأكد من وجود ID في العمود H (8)
                 transaction_id = new_row.get('ID')
                 if not transaction_id:
-                    now = datetime.now()
-                    date_str = now.strftime("%Y%m%d%H%M%S")
-                    random_part = random.randint(1000, 9999)
-                    transaction_id = f"MUT-{date_str}-{random_part}"
-                    try:
-                        ws.update_cell(row_number, 8, transaction_id)
-                        logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
-                    except Exception as e:
-                        logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
-                        continue
-
-                # كتابة رابط التعديل في العمود U (21)
+                    continue  # لا نولد ID هنا، لأن ذلك تم عبر /api/submit
+                # التأكد من كتابة رابط التعديل في العمود U
                 edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
                 hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
                 try:
                     ws.update_cell(row_number, 21, hyperlink_formula)
-                    logger.info(f"🔗 تم كتابة رابط التعديل في العمود U للصف {row_number}")
-                except Exception as e:
-                    logger.error(f"❌ فشل كتابة الرابط للصف {row_number}: {e}")
-
-                # إدراج صف في شيت QR
-                qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
-                if qr_ws:
-                    name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
-                    email = new_row.get('البريد الإلكتروني', '')
-                    view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
-                    qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-                    qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
-
-                    qr_ws.append_row([
-                        name,
-                        email,
-                        transaction_id,
-                        view_link,
-                        qr_image_url,
-                        qr_page_link,
-                        edit_link
-                    ])
-                    new_row_num = len(qr_ws.get_all_values())
-                    qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                    qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
-                    qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
-                    qr_ws.update_cell(new_row_num, 7, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
-                    logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
-
-                # تسجيل في TransactionHistory
-                sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام")
-
-                # إرسال إشعار للمستخدم
-                if background_loop and bot_app:
-                    message = f"🎉 *تم إنشاء معاملة جديدة*\n\n"
-                    message += f"🆔 رقم المعاملة: `{transaction_id}`\n"
-                    message += f"🔗 [رابط المتابعة]({view_link})\n\n"
-                    message += f"📌 يمكنك متابعة كل تحديثات معاملتك عبر هذا البوت.\n"
-                    message += f"🔍 لعرض سجل التتبع الكامل، استخدم الأمر: `/history {transaction_id}`"
-                    asyncio.run_coroutine_threadsafe(
-                        notify_user(transaction_id, message),
-                        background_loop
-                    )
-
+                except:
+                    pass
             last_row_count = current_count
     except Exception as e:
-        logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
+        logger.error(f"خطأ في مراقبة المعاملات: {e}")
 
-# ------------------ جدولة المهام ------------------
 if sheets_client:
     try:
         last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
     except Exception as e:
-        logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
+        logger.error(f"فشل قراءة العدد الأولي: {e}")
         last_row_count = 0
 
     scheduler = BackgroundScheduler()
     scheduler.start()
-    scheduler.add_job(
-        func=check_new_transactions,
-        trigger=IntervalTrigger(seconds=10),
-        id='check_transactions',
-        replace_existing=True
-    )
-    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 10 ثوانٍ)")
+    scheduler.add_job(check_new_transactions, 'interval', seconds=10, id='check_transactions')
+    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 10 ثوانٍ) - احتياطي")
     atexit.register(lambda: scheduler.shutdown())
 
-# ------------------ نقاط نهاية API ------------------
+# ------------------ نقاط نهاية API (للراحة) ------------------
 @app.route('/api/headers')
 def api_headers():
     if not sheets_client:
@@ -679,7 +701,6 @@ def verify_page():
     found = False
     transaction_id = None
 
-    # تنظيف المدخلات
     name_clean = name.strip().lower()
     phone_clean = phone.strip()
 
@@ -690,7 +711,6 @@ def verify_page():
         row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
         row_phone = str(row.get('رقم الهاتف', '')).strip()
         logger.info(f"📋 صف {idx+2}: الاسم='{row_name}', الهاتف='{row_phone}'")
-        
         if row_name == name_clean and row_phone == phone_clean:
             transaction_id = row.get('ID')
             if transaction_id:
@@ -1121,7 +1141,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                </tr>`;
                 tbody.innerHTML += row;
             });
         });
