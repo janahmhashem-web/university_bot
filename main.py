@@ -39,7 +39,21 @@ except Exception as e:
     sheets_client = None
 
 app = Flask(__name__)
-
+@app.route('/debug-rows')
+def debug_rows():
+    if not sheets_client:
+        return "sheets_client not ready"
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if not ws:
+        return "worksheet not found"
+    records = ws.get_all_records()
+    # عرض أول 5 صفوف مع التركيز على الاسم والهاتف
+    output = []
+    for i, row in enumerate(records[:5]):
+        name = row.get('اسم صاحب المعاملة الثلاثي', '')
+        phone = row.get('رقم الهاتف', '')
+        output.append(f"Row {i+2}: name='{name}', phone='{phone}'")
+    return "<br>".join(output)
 # ------------------ الذكاء الاصطناعي ------------------
 try:
     ai_assistant = AIAssistant()
