@@ -9,11 +9,12 @@ class AIAssistant:
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError("GROQ_API_KEY not set")
+        # إنشاء العميل بدون تمرير أي معاملات إضافية
+        # نسخة متوافقة مع جميع الإصدارات
         self.client = Groq(api_key=api_key)
         self.model = "mixtral-8x7b-32768"
 
     async def get_response(self, user_message, user_id, user_name):
-        """رد على الرسائل العادية"""
         try:
             chat_completion = self.client.chat.completions.create(
                 messages=[
@@ -30,7 +31,6 @@ class AIAssistant:
             return "عذراً، حدث خطأ في المعالجة."
 
     async def analyze_transaction(self, transaction_data, history):
-        """تحليل معاملة باستخدام الذكاء الاصطناعي"""
         try:
             summary = f"رقم المعاملة: {transaction_data.get('ID', 'غير معروف')}\n"
             summary += f"الاسم: {transaction_data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}\n"
