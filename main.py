@@ -108,11 +108,9 @@ def api_submit():
             file_data = uploaded_file.read()
             file_link = sheets_client.upload_file_to_drive(file_data, uploaded_file.filename)
             if file_link:
-                # دمج النص المكتوب مع رابط الملف
                 attachments = attachments_text + "\n" + file_link if attachments_text else file_link
             else:
                 attachments = attachments_text
-        # إذا لم يوجد ملف، نستخدم النص فقط
 
         timestamp = datetime.now().isoformat()
 
@@ -154,7 +152,7 @@ def api_submit():
             elif header == 'ID':
                 new_row[idx] = transaction_id
             elif header == 'الرابط':
-                new_row[idx] = edit_link   # نكتب الرابط كنص عادي، لا نحتاج تحديث منفصل
+                new_row[idx] = edit_link   # نكتب الرابط كنص عادي
         ws.append_row(new_row)   # كتابة واحدة فقط
 
         # إدراج صف في شيت QR (كتابة واحدة)
@@ -221,7 +219,6 @@ def register_transaction():
                 input:focus, select:focus, textarea:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); background: white; }
                 button { background: #8b5cf6; color: white; border: none; padding: 14px 24px; font-size: 18px; font-weight: 600; border-radius: 40px; width: 100%; cursor: pointer; transition: 0.2s; margin-top: 10px; }
                 button:hover { background: #7c3aed; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,92,246,0.3); }
-                button:disabled { background: #b39ddb; cursor: not-allowed; transform: none; box-shadow: none; }
                 .required:after { content: " *"; color: #ef4444; }
                 .info-box { background: #f3f4f6; border-radius: 20px; padding: 15px; margin-bottom: 20px; font-size: 14px; color: #4b5563; text-align: center; }
                 .result { margin-top: 20px; padding: 15px; border-radius: 20px; background: #f9fafb; display: none; }
@@ -293,9 +290,10 @@ def register_transaction():
                     e.preventDefault();
                     const submitBtn = document.getElementById('submitBtn');
                     const resultDiv = document.getElementById('result');
-
+                    
                     // تعطيل الزر ومنع الإرسال المتكرر
                     submitBtn.disabled = true;
+                    const originalText = submitBtn.textContent;
                     submitBtn.textContent = 'جاري الإرسال...';
                     resultDiv.innerHTML = '<div>جاري التسجيل...</div>';
                     resultDiv.className = 'result';
@@ -318,18 +316,18 @@ def register_transaction():
                                 </div>
                             `;
                             resultDiv.classList.add('success');
-                            // الزر يبقى معطلاً لأن الإرسال نجح ولا حاجة لإعادة المحاولة
+                            // لا نعيد تمكين الزر لأن العملية انتهت بنجاح، يمكن إبقاؤه معطلاً.
                         } else {
                             resultDiv.innerHTML = `❌ فشل التسجيل: ${json.error || 'خطأ غير معروف'}`;
                             resultDiv.classList.add('error');
                             submitBtn.disabled = false;
-                            submitBtn.textContent = 'إرسال المعاملة';
+                            submitBtn.textContent = originalText;
                         }
                     } catch (err) {
                         resultDiv.innerHTML = '❌ خطأ في الاتصال بالخادم';
                         resultDiv.classList.add('error');
                         submitBtn.disabled = false;
-                        submitBtn.textContent = 'إرسال المعاملة';
+                        submitBtn.textContent = originalText;
                     }
                 });
             </script>
@@ -1253,7 +1251,7 @@ INDEX_HTML = """<!DOCTYPE html>
                      </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-            </table>
+             </table>
         </div>
     </div>
     <script>
@@ -1266,7 +1264,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });

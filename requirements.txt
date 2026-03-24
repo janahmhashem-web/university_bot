@@ -13,3 +13,4 @@ qrcode==7.4.2
 pillow==10.4.0
 pandas==2.2.3
 python-dotenv==1.0.0
+google-api-python-client==2.108.0
