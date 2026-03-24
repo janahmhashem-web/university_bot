@@ -89,15 +89,17 @@ def save_user_chat(transaction_id, chat_id):
     except Exception as e:
         logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
-# ------------------ نقطة استقبال النموذج (توليد ID فوري) ------------------
+# ------------------ نقطة استقبال المعاملة (توليد ID فوري) ------------------
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
-    """استقبال البيانات من Google Forms، توليد ID، حفظ في الشيت، إعادة الروابط"""
     try:
         data = request.json
         name = data.get('name', '').strip()
         phone = data.get('phone', '').strip()
-        email = data.get('email', '').strip()
+        function = data.get('function', '').strip()
+        department = data.get('department', '').strip()
+        transaction_type = data.get('transaction_type', '').strip()
+        attachments = data.get('attachments', '').strip()
         timestamp = data.get('timestamp', datetime.now().isoformat())
 
         if not name or not phone:
@@ -116,11 +118,9 @@ def api_submit():
         random_part = random.randint(1000, 9999)
         transaction_id = f"MUT-{date_str}-{random_part}"
 
-        # الحصول على العناوين لتحديد عدد الأعمدة
+        # الحصول على العناوين لتحديد موقع الأعمدة
         headers = ws.row_values(1)
-        # إنشاء صف جديد بطول مناسب
         new_row = [''] * len(headers)
-        # ملء الحقول الأساسية حسب الأعمدة المعروفة
         for idx, header in enumerate(headers):
             if header == 'Timestamp':
                 new_row[idx] = timestamp
@@ -128,11 +128,16 @@ def api_submit():
                 new_row[idx] = name
             elif header == 'رقم الهاتف':
                 new_row[idx] = phone
-            elif header == 'البريد الإلكتروني':
-                new_row[idx] = email
+            elif header == 'الوظيفة':
+                new_row[idx] = function
+            elif header == 'القسم':
+                new_row[idx] = department
+            elif header == 'نوع المعاملة':
+                new_row[idx] = transaction_type
+            elif header == 'المرافقات':
+                new_row[idx] = attachments
             elif header == 'ID':
                 new_row[idx] = transaction_id
-        # إضافة الصف
         ws.append_row(new_row)
 
         # تحديث العمود U (21) برابط التعديل (للموظف)
@@ -152,7 +157,6 @@ def api_submit():
             qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
             qr_ws.append_row([
                 name,
-                email,
                 transaction_id,
                 view_link,
                 qr_image_url,
@@ -160,10 +164,10 @@ def api_submit():
                 edit_link
             ])
             new_qr_row = len(qr_ws.get_all_values())
-            qr_ws.update_cell(new_qr_row, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-            qr_ws.update_cell(new_qr_row, 5, f'=IMAGE("{qr_image_url}")')
-            qr_ws.update_cell(new_qr_row, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
-            qr_ws.update_cell(new_qr_row, 7, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
+            qr_ws.update_cell(new_qr_row, 3, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
+            qr_ws.update_cell(new_qr_row, 4, f'=IMAGE("{qr_image_url}")')
+            qr_ws.update_cell(new_qr_row, 5, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
+            qr_ws.update_cell(new_qr_row, 6, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
 
         # تسجيل في TransactionHistory
         sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
@@ -173,13 +177,12 @@ def api_submit():
             asyncio.run_coroutine_threadsafe(
                 bot_app.bot.send_message(
                     chat_id=Config.ADMIN_CHAT_ID,
-                    text=f"🆕 *معاملة جديدة*\nالاسم: {name}\nالهاتف: {phone}\nID: {transaction_id}",
+                    text=f"🆕 *معاملة جديدة*\nالاسم: {name}\nالهاتف: {phone}\nID: {transaction_id}\nالوظيفة: {function}\nالقسم: {department}",
                     parse_mode='Markdown'
                 ),
                 background_loop
             )
 
-        # إعادة الروابط للمستخدم
         return jsonify({
             'success': True,
             'id': transaction_id,
@@ -191,7 +194,140 @@ def api_submit():
         logger.error(f"خطأ في /api/submit: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# ------------------ دوال البوت الأساسية ------------------
+# ------------------ صفحة تسجيل المعاملة ------------------
+@app.route('/register', methods=['GET', 'POST'])
+def register_transaction():
+    if request.method == 'GET':
+        return '''
+        <!DOCTYPE html>
+        <html dir="rtl">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>تسجيل معاملة جديدة</title>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #f5f0ff 0%, #f0f2f5 100%); margin: 0; padding: 20px; }
+                .container { max-width: 700px; margin: 20px auto; background: white; border-radius: 32px; box-shadow: 0 20px 35px -10px rgba(0,0,0,0.1); overflow: hidden; }
+                .header { background: #8b5cf6; color: white; padding: 30px; text-align: center; }
+                .header h1 { margin: 0; font-size: 28px; font-weight: 600; }
+                .header p { margin: 10px 0 0; opacity: 0.9; }
+                .content { padding: 30px; }
+                .form-group { margin-bottom: 20px; }
+                label { display: block; margin-bottom: 8px; font-weight: 600; color: #1f2937; }
+                input, select { width: 100%; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 16px; font-size: 16px; transition: all 0.2s; background: #f9fafb; }
+                input:focus, select:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); background: white; }
+                button { background: #8b5cf6; color: white; border: none; padding: 14px 24px; font-size: 18px; font-weight: 600; border-radius: 40px; width: 100%; cursor: pointer; transition: 0.2s; margin-top: 10px; }
+                button:hover { background: #7c3aed; transform: translateY(-2px); box-shadow: 0 8px 20px rgba(139,92,246,0.3); }
+                .required:after { content: " *"; color: #ef4444; }
+                .info-box { background: #f3f4f6; border-radius: 20px; padding: 15px; margin-bottom: 20px; font-size: 14px; color: #4b5563; text-align: center; }
+                .result { margin-top: 20px; padding: 15px; border-radius: 20px; background: #f9fafb; display: none; }
+                .result.success { background: #d1fae5; color: #065f46; display: block; }
+                .result.error { background: #fee2e2; color: #991b1b; display: block; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📝 تسجيل معاملة جديدة</h1>
+                    <p>املأ البيانات التالية لتسجيل معاملتك</p>
+                </div>
+                <div class="content">
+                    <div class="info-box">
+                        💡 بعد إرسال المعاملة، سيتم إنشاء رقم معاملة فريد وستحصل على رابط لمتابعة المعاملة عبر البوت.
+                    </div>
+                    <form id="transactionForm">
+                        <div class="form-group">
+                            <label class="required">الاسم الثلاثي</label>
+                            <input type="text" id="name" required placeholder="مثال: أحمد محمد علي">
+                        </div>
+                        <div class="form-group">
+                            <label class="required">رقم الهاتف</label>
+                            <input type="text" id="phone" required placeholder="07712345678">
+                        </div>
+                        <div class="form-group">
+                            <label class="required">الوظيفة</label>
+                            <select id="function" required>
+                                <option value="طالب">طالب</option>
+                                <option value="تدريسي">تدريسي</option>
+                                <option value="أخرى">أخرى</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="required">القسم</label>
+                            <select id="department" required>
+                                <option value="قسم تكنولوجيا المعلومات و الإتصالات">قسم تكنولوجيا المعلومات و الإتصالات</option>
+                                <option value="قسم التقنيات الكهربائية">قسم التقنيات الكهربائية</option>
+                                <option value="قسم تقنيات المكائن والمعدات">قسم تقنيات المكائن والمعدات</option>
+                                <option value="قسم التقنيات الميكانيكية">قسم التقنيات الميكانيكية</option>
+                                <option value="قسم التقنيات الإلكترونية">قسم التقنيات الإلكترونية</option>
+                                <option value="قسم تقنيات الصناعات الكيمياوية">قسم تقنيات الصناعات الكيمياوية</option>
+                                <option value="قسم تقنيات المساحة">قسم تقنيات المساحة</option>
+                                <option value="قسم تقنيات الموارد المائية">قسم تقنيات الموارد المائية</option>
+                                <option value="قسم تقنيات الأجهزة الطبية">قسم تقنيات الأجهزة الطبية</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>نوع المعاملة</label>
+                            <input type="text" id="transaction_type" placeholder="مثال: تتبع، استعلام، شكوى، اقتراح">
+                        </div>
+                        <div class="form-group">
+                            <label>المرافقات (رابط أو نص)</label>
+                            <input type="text" id="attachments" placeholder="رابط ملف، صورة، ملاحظة">
+                        </div>
+                        <button type="submit">إرسال المعاملة</button>
+                    </form>
+                    <div id="result" class="result"></div>
+                </div>
+            </div>
+            <script>
+                document.getElementById('transactionForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const data = {
+                        name: document.getElementById('name').value.trim(),
+                        phone: document.getElementById('phone').value.trim(),
+                        function: document.getElementById('function').value,
+                        department: document.getElementById('department').value,
+                        transaction_type: document.getElementById('transaction_type').value.trim(),
+                        attachments: document.getElementById('attachments').value.trim()
+                    };
+                    const resultDiv = document.getElementById('result');
+                    resultDiv.innerHTML = '<div>جاري التسجيل...</div>';
+                    resultDiv.className = 'result';
+                    try {
+                        const res = await fetch('/api/submit', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data)
+                        });
+                        const json = await res.json();
+                        if (json.success) {
+                            resultDiv.innerHTML = `
+                                <div style="text-align:center;">
+                                    ✅ تم تسجيل المعاملة بنجاح<br>
+                                    🆔 رقم المعاملة: <strong style="font-size:1.2em;">${json.id}</strong><br><br>
+                                    <a href="${json.view_link}" target="_blank" style="background:#8b5cf6; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">🔗 عرض التفاصيل</a>
+                                    <a href="${json.deep_link}" target="_blank" style="background:#2c3e50; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">📱 فتح البوت</a>
+                                    <p style="margin-top:15px; font-size:13px;">احتفظ برقم المعاملة لمتابعة معاملتك.</p>
+                                </div>
+                            `;
+                            resultDiv.classList.add('success');
+                        } else {
+                            resultDiv.innerHTML = `❌ فشل التسجيل: ${json.error || 'خطأ غير معروف'}`;
+                            resultDiv.classList.add('error');
+                        }
+                    } catch (err) {
+                        resultDiv.innerHTML = '❌ خطأ في الاتصال بالخادم';
+                        resultDiv.classList.add('error');
+                    }
+                });
+            </script>
+        </body>
+        </html>
+        '''
+    else:
+        return "Use /api/submit", 405
+
+# ------------------ دوال البوت ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -469,7 +605,7 @@ if Config.WEB_APP_URL and bot_app:
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
 
-# ------------------ مراقبة المعاملات الجديدة (احتياطي - لا تولد ID) ------------------
+# ------------------ مراقبة المعاملات الجديدة (احتياطي) ------------------
 last_row_count = 0
 
 def check_new_transactions():
@@ -483,14 +619,12 @@ def check_new_transactions():
         records = ws.get_all_records()
         current_count = len(records)
         if current_count > last_row_count:
-            # فقط نكمل الإجراءات التي قد تكون فاتت (مثل كتابة رابط التعديل)
             for i in range(last_row_count, current_count):
                 row_number = i + 2
                 new_row = records[i]
                 transaction_id = new_row.get('ID')
                 if not transaction_id:
-                    continue  # لا نولد ID هنا، لأن ذلك تم عبر /api/submit
-                # التأكد من كتابة رابط التعديل في العمود U
+                    continue
                 edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
                 hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
                 try:
@@ -514,7 +648,7 @@ if sheets_client:
     logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 10 ثوانٍ) - احتياطي")
     atexit.register(lambda: scheduler.shutdown())
 
-# ------------------ نقاط نهاية API (للراحة) ------------------
+# ------------------ نقاط نهاية API ------------------
 @app.route('/api/headers')
 def api_headers():
     if not sheets_client:
@@ -559,13 +693,11 @@ def api_transaction(id):
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        # تطبيق التحديثات
         for key, value in updates.items():
             if key in headers:
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
 
-        # تحديث أعمدة التتبع
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now().isoformat()
 
@@ -593,7 +725,6 @@ def api_transaction(id):
                 current_count = 0
             ws.update_cell(row, col_modification_count, current_count + 1)
 
-        # تسجيل في TransactionHistory
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
@@ -670,21 +801,30 @@ def verify_page():
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>التحقق من المعاملة</title>
             <style>
-                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; text-align: center; }
-                .card { max-width: 400px; margin: 50px auto; background: white; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }
-                input { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ccc; border-radius: 8px; box-sizing: border-box; }
-                button { background: #2c3e50; color: white; padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; width: 100%; font-size: 16px; }
-                button:hover { opacity: 0.9; }
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #f5f0ff 0%, #f0f2f5 100%); margin: 0; padding: 20px; }
+                .card { max-width: 450px; margin: 50px auto; background: white; border-radius: 32px; box-shadow: 0 20px 35px -10px rgba(0,0,0,0.1); overflow: hidden; }
+                .header { background: #8b5cf6; color: white; padding: 30px; text-align: center; }
+                .header h1 { margin: 0; font-size: 28px; }
+                .content { padding: 30px; }
+                input { width: 100%; padding: 12px 16px; margin: 8px 0; border: 1px solid #e5e7eb; border-radius: 16px; font-size: 16px; background: #f9fafb; }
+                button { background: #8b5cf6; color: white; border: none; padding: 14px; font-size: 18px; border-radius: 40px; width: 100%; cursor: pointer; margin-top: 15px; }
+                button:hover { background: #7c3aed; transform: translateY(-2px); }
+                .info { background: #f3f4f6; border-radius: 20px; padding: 12px; margin-bottom: 20px; font-size: 13px; text-align: center; color: #4b5563; }
             </style>
         </head>
         <body>
             <div class="card">
-                <h2>🔍 التحقق من المعاملة</h2>
-                <form method="GET">
-                    <input type="text" name="name" placeholder="الاسم الثلاثي" required>
-                    <input type="text" name="phone" placeholder="رقم الهاتف" required>
-                    <button type="submit">تحقق</button>
-                </form>
+                <div class="header">
+                    <h1>🔍 التحقق من المعاملة</h1>
+                </div>
+                <div class="content">
+                    <div class="info">💡 أدخل اسمك الثلاثي ورقم هاتفك كما في معاملتك</div>
+                    <form method="GET">
+                        <input type="text" name="name" placeholder="الاسم الثلاثي" required>
+                        <input type="text" name="phone" placeholder="رقم الهاتف" required>
+                        <button type="submit">تحقق</button>
+                    </form>
+                </div>
             </div>
         </body>
         </html>
@@ -704,18 +844,13 @@ def verify_page():
     name_clean = name.strip().lower()
     phone_clean = phone.strip()
 
-    logger.info(f"🔍 البحث عن: الاسم='{name_clean}', الهاتف='{phone_clean}'")
-    logger.info(f"📊 عدد السجلات في الشيت: {len(records)}")
-
     for idx, row in enumerate(records):
         row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
         row_phone = str(row.get('رقم الهاتف', '')).strip()
-        logger.info(f"📋 صف {idx+2}: الاسم='{row_name}', الهاتف='{row_phone}'")
         if row_name == name_clean and row_phone == phone_clean:
             transaction_id = row.get('ID')
             if transaction_id:
                 found = True
-                logger.info(f"✅ تم العثور على المعاملة: {transaction_id}")
                 break
 
     if found and transaction_id:
@@ -727,22 +862,28 @@ def verify_page():
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>معاملتك</title>
             <style>
-                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; text-align: center; }}
-                .card {{ max-width: 500px; margin: 50px auto; background: white; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }}
-                .id {{ font-size: 28px; font-weight: bold; color: #e67e22; background: #fef5e8; display: inline-block; padding: 8px 20px; border-radius: 40px; margin: 15px 0; letter-spacing: 1px; }}
-                .btn {{ display: inline-block; background: #2c3e50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 10px 5px; transition: 0.3s; }}
-                .btn-telegram {{ background: #0088cc; }}
-                .btn:hover {{ opacity: 0.9; transform: translateY(-2px); }}
+                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #f5f0ff 0%, #f0f2f5 100%); margin: 0; padding: 20px; }}
+                .card {{ max-width: 550px; margin: 50px auto; background: white; border-radius: 32px; box-shadow: 0 20px 35px -10px rgba(0,0,0,0.1); overflow: hidden; }}
+                .header {{ background: #8b5cf6; color: white; padding: 30px; text-align: center; }}
+                .id {{ font-size: 32px; font-weight: bold; color: #8b5cf6; background: #f5f0ff; display: inline-block; padding: 12px 28px; border-radius: 60px; margin: 20px 0; letter-spacing: 1px; }}
+                .btn {{ display: inline-block; background: #8b5cf6; color: white; padding: 12px 28px; text-decoration: none; border-radius: 40px; margin: 10px; transition: 0.2s; }}
+                .btn-telegram {{ background: #2c3e50; }}
+                .btn:hover {{ transform: translateY(-2px); box-shadow: 0 5px 15px rgba(139,92,246,0.3); }}
+                .content {{ padding: 30px; text-align: center; }}
             </style>
         </head>
         <body>
             <div class="card">
-                <h2>✅ تم العثور على معاملتك</h2>
-                <p>رقم المعاملة الخاص بك:</p>
-                <div class="id">{transaction_id}</div>
-                <p>احتفظ بهذا الرقم لمتابعة المعاملة.</p>
-                <a href="{Config.WEB_APP_URL}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
-                <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت لمتابعة المعاملة</a>
+                <div class="header">
+                    <h2>✅ تم العثور على معاملتك</h2>
+                </div>
+                <div class="content">
+                    <p>رقم المعاملة الخاص بك:</p>
+                    <div class="id">{transaction_id}</div>
+                    <p>احتفظ بهذا الرقم لمتابعة المعاملة.</p>
+                    <a href="{Config.WEB_APP_URL}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
+                    <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت</a>
+                </div>
             </div>
         </body>
         </html>
@@ -755,27 +896,23 @@ def verify_page():
             <h2>❌ لم نجد معاملة بهذه البيانات</h2>
             <p>الاسم المدخل: "{name}"</p>
             <p>رقم الهاتف المدخل: "{phone}"</p>
-            <p>الرجاء التأكد من صحة البيانات وخلوها من الأخطاء الإملائية أو المسافات.</p>
             <p><a href="/verify">🔍 محاولة مرة أخرى</a></p>
         </body>
         </html>
         """
 
-# ------------------ صفحة عرض المعاملة (للقراءة فقط) ------------------
+# ------------------ صفحة عرض المعاملة (للقراءة فقط) - تصميم بنفسجي فاتح ------------------
 @app.route('/view/<id>')
 def view_transaction_page(id):
     try:
         if not sheets_client:
-            logger.error("❌ sheets_client غير متصل")
             return "⚠️ النظام غير متصل بقاعدة البيانات", 500
 
         row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
         if not row_info:
-            logger.warning(f"❌ المعاملة {id} غير موجودة")
             return f"❌ المعاملة {id} غير موجودة", 404
 
         data = row_info['data']
-        logger.info(f"✅ تم جلب بيانات المعاملة {id}")
 
         # جلب سجل التتبع
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
@@ -785,9 +922,8 @@ def view_transaction_page(id):
             history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
                        for r in records if str(r.get('ID')) == id]
             history.sort(key=lambda x: x['time'], reverse=False)
-            logger.info(f"✅ تم جلب {len(history)} سجل تتبع للمعاملة {id}")
 
-        # بناء HTML بتصميم عصري
+        # بناء HTML بتصميم بنفسجي فاتح
         html = f"""
         <!DOCTYPE html>
         <html dir="rtl" lang="ar">
@@ -795,58 +931,73 @@ def view_transaction_page(id):
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>تفاصيل المعاملة {id}</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
             <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-                * {{ font-family: 'Inter', sans-serif; }}
-                .ios-card {{ background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 24px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }}
-                .label-ios {{ font-size: 13px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }}
-                .timeline-item {{ border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 24px; }}
-                .timeline-dot {{ width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }}
+                * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                body {{ font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #f9f5ff 0%, #f3e8ff 100%); padding: 24px; min-height: 100vh; }}
+                .container {{ max-width: 1000px; margin: 0 auto; }}
+                /* بطاقة رئيسية */
+                .card {{ background: white; border-radius: 32px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.1); overflow: hidden; margin-bottom: 24px; }}
+                .card-header {{ background: #8b5cf6; padding: 28px 32px; color: white; }}
+                .card-header h1 {{ font-size: 28px; font-weight: 700; margin-bottom: 8px; }}
+                .card-header p {{ opacity: 0.9; font-size: 14px; }}
+                .card-content {{ padding: 32px; }}
+                /* شبكة المعلومات */
+                .info-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-bottom: 32px; }}
+                .info-item {{ background: #faf5ff; border-radius: 24px; padding: 20px; transition: all 0.2s; }}
+                .info-label {{ font-size: 13px; font-weight: 600; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }}
+                .info-value {{ font-size: 16px; font-weight: 500; color: #1f2937; word-break: break-word; }}
+                /* تلوين الحالة */
+                .status-badge {{ display: inline-block; padding: 6px 14px; border-radius: 40px; font-size: 13px; font-weight: 600; }}
+                .status-new {{ background: #e2e3e5; color: #383d41; }}
+                .status-processing {{ background: #fff3cd; color: #856404; }}
+                .status-completed {{ background: #d4edda; color: #155724; }}
+                .status-delayed {{ background: #f8d7da; color: #721c24; }}
+                /* سجل التتبع */
+                .timeline {{ position: relative; padding-right: 30px; }}
+                .timeline-item {{ position: relative; padding-bottom: 28px; border-right: 2px solid #e9d5ff; margin-right: 12px; }}
+                .timeline-dot {{ position: absolute; right: -10px; top: 4px; width: 16px; height: 16px; background: #8b5cf6; border-radius: 50%; box-shadow: 0 0 0 4px #faf5ff; }}
                 .timeline-time {{ font-size: 12px; color: #6c757d; margin-bottom: 4px; }}
                 .timeline-action {{ font-weight: 600; color: #1f2937; margin-bottom: 4px; }}
                 .timeline-user {{ font-size: 12px; color: #9ca3af; }}
-                .badge {{ display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }}
-                .badge-new {{ background: #e2e3e5; color: #383d41; }}
-                .badge-processing {{ background: #fff3cd; color: #856404; }}
-                .badge-completed {{ background: #d4edda; color: #155724; }}
-                .badge-delayed {{ background: #f8d7da; color: #721c24; }}
+                /* تعليمات */
+                .instructions {{ background: #faf5ff; border-radius: 24px; padding: 20px; margin-top: 24px; text-align: center; }}
+                .instructions p {{ margin: 8px 0; color: #4b5563; }}
+                .btn {{ display: inline-block; background: #8b5cf6; color: white; padding: 10px 20px; border-radius: 40px; text-decoration: none; margin-top: 12px; transition: 0.2s; }}
+                .btn:hover {{ background: #7c3aed; transform: translateY(-2px); }}
+                hr {{ margin: 20px 0; border: none; height: 1px; background: #e9d5ff; }}
             </style>
         </head>
-        <body class="bg-gradient-to-b from-gray-50 to-gray-100 p-4">
-            <div class="max-w-4xl mx-auto">
-                <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
-                    <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span class="text-blue-600">{id}</span></h1>
-                    <span class="text-gray-500 text-sm bg-white/50 px-3 py-1 rounded-full">(للمتابعة فقط)</span>
-                </div>
-
-                <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
-                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📋 <span>معلومات المعاملة</span></h2>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <body>
+            <div class="container">
+                <div class="card">
+                    <div class="card-header">
+                        <h1>🔍 تفاصيل المعاملة</h1>
+                        <p>رقم المعاملة: <strong>{id}</strong> | للمتابعة فقط</p>
+                    </div>
+                    <div class="card-content">
+                        <div class="info-grid">
         """
         excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط', 'عدد التعديلات', 'البريد الإلكتروني الموظف']
         for key, value in data.items():
             if key not in excluded:
                 display_value = value if value else '—'
                 if key == 'المرافقات' and value and value.startswith('http'):
-                    display_value = f'<a href="{value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>'
+                    display_value = f'<a href="{value}" target="_blank" style="color:#8b5cf6; text-decoration:underline;">📎 فتح المرفق</a>'
                 if key == 'الحالة':
-                    badge_class = "badge-new" if value == "جديد" else ("badge-processing" if value == "قيد المعالجة" else ("badge-completed" if value == "مكتملة" else ("badge-delayed" if value == "متأخرة" else "")))
-                    display_value = f'<span class="badge {badge_class}">{value if value else "—"}</span>'
+                    badge_class = "status-new" if value == "جديد" else ("status-processing" if value == "قيد المعالجة" else ("status-completed" if value == "مكتملة" else ("status-delayed" if value == "متأخرة" else "")))
+                    display_value = f'<span class="status-badge {badge_class}">{value if value else "—"}</span>'
                 html += f"""
-                        <div class="bg-gray-50/80 p-4 rounded-xl">
-                            <span class="label-ios">{key}</span>
-                            <div class="text-gray-900 mt-1 font-medium">{display_value}</div>
-                        </div>
+                            <div class="info-item">
+                                <div class="info-label">{key}</div>
+                                <div class="info-value">{display_value}</div>
+                            </div>
                 """
         html += """
-                    </div>
-                </div>
+                        </div>
 
-                <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
-                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📜 <span>سجل الحركات</span></h2>
-                    <div class="space-y-2">
+                        <h3 style="font-size: 20px; font-weight: 600; margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">📜 سجل الحركات</h3>
+                        <div class="timeline">
         """
         if history:
             for entry in history:
@@ -856,20 +1007,25 @@ def view_transaction_page(id):
                 except:
                     time_str = entry['time']
                 html += f"""
-                        <div class="timeline-item">
-                            <span class="timeline-dot"></span>
-                            <div class="timeline-time">{time_str}</div>
-                            <div class="timeline-action">{entry['action']}</div>
-                            <div class="timeline-user">بواسطة: {entry['user']}</div>
-                        </div>
+                            <div class="timeline-item">
+                                <div class="timeline-dot"></div>
+                                <div class="timeline-time">{time_str}</div>
+                                <div class="timeline-action">{entry['action']}</div>
+                                <div class="timeline-user">بواسطة: {entry['user']}</div>
+                            </div>
                 """
         else:
-            html += '<p class="text-gray-500 text-center py-8">لا يوجد سجل بعد</p>'
+            html += '<p style="color:#6c757d;">لا يوجد سجل بعد</p>'
         html += """
+                        </div>
+
+                        <div class="instructions">
+                            <p>💡 يمكنك متابعة معاملتك عبر البوت:</p>
+                            <a href="https://t.me/""" + Config.BOT_USERNAME + f"""?start={id}" class="btn">📱 فتح البوت لمتابعة المعاملة</a>
+                            <hr>
+                            <p style="font-size:13px;">⚠️ احتفظ برقم المعاملة هذا لمتابعة حالتك. يمكنك أيضاً مسح رمز QR الموجود في البوت.</p>
+                        </div>
                     </div>
-                </div>
-                <div class="text-center text-gray-400 text-sm mt-6">
-                    يمكنك متابعة معاملتك عبر البوت: <a href="https://t.me/""" + Config.BOT_USERNAME + f"""?start={id}" class="text-blue-500 underline">@{Config.BOT_USERNAME}</a>
                 </div>
             </div>
         </body>
@@ -952,8 +1108,8 @@ EDIT_HTML = """
             fetch('/api/headers').then(r => r.json())
         ]).then(([data, headers]) => {
             const readonlyKeys = [
-                'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
-                'القسم', 'نوع المعاملة', 'المرافقات', 'ID'
+                'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف',
+                'الوظيفة', 'القسم', 'نوع المعاملة', 'المرافقات', 'ID'
             ];
             const excludedKeys = ['LOG_JSON', 'الرابط', 'عدد التعديلات', 'البريد الإلكتروني الموظف'];
 

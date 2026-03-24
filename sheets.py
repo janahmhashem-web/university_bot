@@ -30,15 +30,15 @@ class GoogleSheetsClient:
 
         sheets_required = {
             Config.SHEET_MANAGER: [
-                "Timestamp", "اسم صاحب المعاملة الثلاثي", "رقم الهاتف", "البريد الإلكتروني",
-                "القسم", "نوع المعاملة", "المرافقات", "ID", "الحالة", "الأولوية",
+                "Timestamp", "اسم صاحب المعاملة الثلاثي", "رقم الهاتف",
+                "الوظيفة", "القسم", "نوع المعاملة", "المرافقات", "ID", "الحالة", "الأولوية",
                 "الموظف المسؤول", "المؤسسة الحالية", "المؤسسة التالية", "تاريخ التحويل",
                 "سبب التحويل", "الموافق", "ملاحظات إضافية", "آخر إجراء", "التأخير",
                 "المستمسكات المطلوبة", "الرابط", "آخر تعديل بواسطة", "آخر تعديل بتاريخ",
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON"
             ],
             Config.SHEET_HISTORY: ["timestamp", "ID", "action", "user"],
-            Config.SHEET_QR: ["name", "email", "transaction_id", "view_link", "qr_image_url", "qr_page_link", "edit_link"],
+            Config.SHEET_QR: ["name", "transaction_id", "view_link", "qr_image_url", "qr_page_link", "edit_link"],
             Config.SHEET_USERS: ["transaction_id", "chat_id"]
         }
 
@@ -88,3 +88,8 @@ class GoogleSheetsClient:
                 ws.append_row([datetime.now().isoformat(), transaction_id, action, user])
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
+
+    def update_cell(self, sheet_name, row, col, value):
+        ws = self.get_worksheet(sheet_name)
+        if ws:
+            ws.update_cell(row, col, value)
