@@ -12,7 +12,6 @@ from flask import Flask, request, jsonify, render_template_string, Response, abo
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 import atexit
 import requests
 from datetime import datetime
@@ -93,24 +92,19 @@ def save_user_chat(transaction_id, chat_id):
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
     try:
-        # قراءة البيانات (قد تحتوي على ملف)
         name = request.form.get('name', '').strip()
         phone = request.form.get('phone', '').strip()
         function = request.form.get('function', '').strip()
         department = request.form.get('department', '').strip()
         transaction_type = request.form.get('transaction_type', '').strip()
         attachments_text = request.form.get('attachments_text', '').strip()
-        # معالجة الملف المرفوع
         uploaded_file = request.files.get('attachment_file')
-        file_link = None
         attachments = attachments_text
         if uploaded_file and uploaded_file.filename:
             file_data = uploaded_file.read()
             file_link = sheets_client.upload_file_to_drive(file_data, uploaded_file.filename)
             if file_link:
                 attachments = attachments_text + "\n" + file_link if attachments_text else file_link
-            else:
-                attachments = attachments_text
 
         timestamp = datetime.now().isoformat()
 
@@ -124,13 +118,11 @@ def api_submit():
         if not ws:
             return jsonify({'success': False, 'error': 'ورقة manager غير موجودة'}), 500
 
-        # توليد ID
         now = datetime.now()
         date_str = now.strftime("%Y%m%d%H%M%S")
         random_part = random.randint(1000, 9999)
         transaction_id = f"MUT-{date_str}-{random_part}"
 
-        # إعداد الصف الجديد لورقة manager
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
         edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
@@ -152,10 +144,10 @@ def api_submit():
             elif header == 'ID':
                 new_row[idx] = transaction_id
             elif header == 'الرابط':
-                new_row[idx] = edit_link   # نكتب الرابط كنص عادي
-        ws.append_row(new_row)   # كتابة واحدة فقط
+                new_row[idx] = edit_link
+        ws.append_row(new_row)
+        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager")
 
-        # إدراج صف في شيت QR (كتابة واحدة)
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
@@ -169,11 +161,10 @@ def api_submit():
                 qr_page_link,
                 edit_link
             ])
+            logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR")
 
-        # تسجيل التاريخ (كتابة إضافية – يمكن حذفها إذا أردنا تقليل الطلبات)
         sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
 
-        # إشعار للمسؤول (لا يستخدم API)
         if Config.ADMIN_CHAT_ID and background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
                 bot_app.bot.send_message(
@@ -192,7 +183,7 @@ def api_submit():
         })
 
     except Exception as e:
-        logger.error(f"خطأ في /api/submit: {e}", exc_info=True)
+        logger.error(f"🔥 خطأ في /api/submit: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # ------------------ صفحة تسجيل المعاملة ------------------
@@ -358,12 +349,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
 
-    # لوحة الأزرار التفاعلية
     keyboard = [
         [InlineKeyboardButton("🔍 تفاصيل معاملة", callback_data="cmd_id")],
         [InlineKeyboardButton("📜 سجل تتبع معاملة", callback_data="cmd_history")],
         [InlineKeyboardButton("📱 تعليمات QR", callback_data="cmd_qr")],
         [InlineKeyboardButton("💬 التواصل مع الدعم", callback_data="cmd_support")],
+        [InlineKeyboardButton("📊 تحليل معاملة", callback_data="cmd_analyze")],
     ]
     if is_admin:
         keyboard.append([InlineKeyboardButton("📊 إحصائيات", callback_data="cmd_stats")])
@@ -404,6 +395,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "📨 لإرسال رسالة إلى فريق الدعم، استخدم الأمر `/support`.\n"
             "سنتواصل معك في أقرب وقت.",
+            parse_mode='Markdown'
+        )
+    elif data == "cmd_analyze":
+        await query.edit_message_text(
+            "📊 أرسل رقم المعاملة (ID) لتحليلها.\n\n"
+            "مثال: `/analyze MUT-20260324123456-1234`",
             parse_mode='Markdown'
         )
     elif data == "cmd_stats":
@@ -544,6 +541,37 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "شكراً لتواصلك معنا."
     )
 
+async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تحليل معاملة باستخدام الذكاء الاصطناعي"""
+    try:
+        if not sheets_client:
+            await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+            return
+        if not context.args:
+            await update.message.reply_text("الرجاء إدخال رقم المعاملة: /analyze MUT-123456")
+            return
+        transaction_id = context.args[0]
+        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+        if not row_info:
+            await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
+            return
+        transaction_data = row_info['data']
+
+        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+        history = []
+        if ws:
+            records = ws.get_all_records()
+            history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
+                       for r in records if str(r.get('ID')) == transaction_id]
+            history.sort(key=lambda x: x['time'])
+
+        await update.message.reply_text("🔍 جاري تحليل المعاملة...")
+        analysis = await ai_assistant.analyze_transaction(transaction_data, history)
+        await update.message.reply_text(analysis, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"خطأ في /analyze: {e}", exc_info=True)
+        await update.message.reply_text("عذراً، حدث خطأ أثناء التحليل.")
+
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     logger.info(f"🧠 معالجة رسالة عادية: {text}")
@@ -597,7 +625,8 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("stats", stats))
         bot_app.add_handler(CommandHandler("qr", qr_command))
         bot_app.add_handler(CommandHandler("support", support_command))
-        bot_app.add_handler(CallbackQueryHandler(button_callback))  # الأزرار التفاعلية
+        bot_app.add_handler(CommandHandler("analyze", analyze))
+        bot_app.add_handler(CallbackQueryHandler(button_callback))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
@@ -664,11 +693,6 @@ if Config.WEB_APP_URL and bot_app:
         set_webhook_sync()
     threading.Thread(target=delayed_webhook).start()
     logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
-
-# ------------------ تعطيل مراقبة المعاملات الجديدة لتوفير الطلبات ------------------
-# (تم تعطيلها لأن جميع المعاملات تدخل عبر /api/submit)
-# def check_new_transactions():
-#     pass
 
 # ------------------ نقاط نهاية API ------------------
 @app.route('/api/headers')
@@ -923,7 +947,7 @@ def verify_page():
         </html>
         """
 
-# ------------------ صفحة عرض المعاملة (للقراءة فقط) - تصميم بنفسجي فاتح ------------------
+# ------------------ صفحة عرض المعاملة (للقراءة فقط) ------------------
 @app.route('/view/<id>')
 def view_transaction_page(id):
     try:
@@ -936,7 +960,6 @@ def view_transaction_page(id):
 
         data = row_info['data']
 
-        # جلب سجل التتبع
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         history = []
         if history_ws:
@@ -945,7 +968,6 @@ def view_transaction_page(id):
                        for r in records if str(r.get('ID')) == id]
             history.sort(key=lambda x: x['time'], reverse=False)
 
-        # بناء HTML بتصميم بنفسجي فاتح
         html = f"""
         <!DOCTYPE html>
         <html dir="rtl" lang="ar">
@@ -1292,16 +1314,16 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="bg-white rounded-xl shadow overflow-x-auto">
             <table class="min-w-full">
                 <thead class="bg-gray-50">
-                    发展
+                    <tr>
                         <th class="px-4 py-2 text-right">ID</th>
                         <th class="px-4 py-2 text-right">الاسم</th>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                    \\
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-            表
+            </table>
         </div>
     </div>
     <script>
@@ -1309,12 +1331,12 @@ INDEX_HTML = """<!DOCTYPE html>
             const tbody = document.getElementById('transactions');
             data.forEach(t => {
                 const row = `<tr class="border-t">
-                    <td class="px-4 py-2">${t.id}${t.id}</td>
+                    <td class="px-4 py-2">${t.id}</td>
                     <td class="px-4 py-2">${t.name}</td>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 <\/tr>`;
+                </tr>`;
                 tbody.innerHTML += row;
             });
         });
