@@ -18,7 +18,7 @@ class GoogleSheetsClient:
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
             # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي للجدول
-            self.spreadsheet = self.client.open("اسم_جدولك")
+            self.spreadsheet = self.client.open("university system")
             logger.info("✅ تم الاتصال بـ Google Sheets")
             # إنشاء الأوراق المطلوبة وتعبئة الأعمدة الأساسية
             self._init_sheets()
