@@ -39,7 +39,16 @@ except Exception as e:
     sheets_client = None
 
 app = Flask(__name__)
-
+@app.route('/debug-sheet')
+def debug_sheet():
+    if not sheets_client:
+        return "sheets_client not ready"
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if not ws:
+        return "worksheet not found"
+    headers = ws.row_values(1)
+    rows = ws.get_all_values()[1:4]  # أول 3 صفوف بعد الرأس
+    return f"Headers: {headers}<br>First rows: {rows}"
 # ------------------ الذكاء الاصطناعي ------------------
 try:
     ai_assistant = AIAssistant()
