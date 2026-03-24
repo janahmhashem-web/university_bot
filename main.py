@@ -413,7 +413,7 @@ def check_new_transactions():
                 # تسجيل في TransactionHistory
                 sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام")
 
-                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً (باستخدام asyncio.run_coroutine_threadsafe)
+                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً
                 if background_loop and bot_app:
                     asyncio.run_coroutine_threadsafe(
                         notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})"),
@@ -444,6 +444,17 @@ if sheets_client:
     atexit.register(lambda: scheduler.shutdown())
 
 # ------------------ نقاط نهاية API ------------------
+@app.route('/api/headers')
+def api_headers():
+    """إرجاع قائمة عناوين الأعمدة من ورقة manager"""
+    if not sheets_client:
+        return jsonify([])
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if not ws:
+        return jsonify([])
+    headers = ws.row_values(1)
+    return jsonify(headers)
+
 @app.route('/api/transactions', methods=['GET'])
 def api_transactions():
     if not sheets_client:
@@ -484,25 +495,39 @@ def api_transaction(id):
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
 
-        # تحديث الأعمدة V,W,X (آخر تعديل)
+        # تحديث أعمدة التتبع (آخر تعديل بواسطة، آخر تعديل بتاريخ، عدد التعديلات)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now().isoformat()
-        col_v = 22  # عمود V (آخر تعديل بواسطة)
-        col_w = 23  # عمود W (آخر تعديل بتاريخ)
-        col_x = 24  # عمود X (عدد التعديلات)
-        ws.update_cell(row, col_v, employee_name)
-        ws.update_cell(row, col_w, now)
+
         try:
-            current_count = int(ws.cell(row, col_x).value or 0)
-        except:
-            current_count = 0
-        ws.update_cell(row, col_x, current_count + 1)
+            col_last_modified_by = headers.index('آخر تعديل بواسطة') + 1
+        except ValueError:
+            col_last_modified_by = None
+        try:
+            col_last_modified_date = headers.index('آخر تعديل بتاريخ') + 1
+        except ValueError:
+            col_last_modified_date = None
+        try:
+            col_modification_count = headers.index('عدد التعديلات') + 1
+        except ValueError:
+            col_modification_count = None
+
+        if col_last_modified_by:
+            ws.update_cell(row, col_last_modified_by, employee_name)
+        if col_last_modified_date:
+            ws.update_cell(row, col_last_modified_date, now)
+        if col_modification_count:
+            try:
+                current_count = int(ws.cell(row, col_modification_count).value or 0)
+            except:
+                current_count = 0
+            ws.update_cell(row, col_modification_count, current_count + 1)
 
         # تسجيل في TransactionHistory
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # تحليل التأخير وإرسال إشعار (باستخدام asyncio.run_coroutine_threadsafe)
+        # تحليل التأخير وإرسال إشعار
         new_delay = updates.get('التأخير', old_data.get('التأخير'))
         new_status = updates.get('الحالة', old_data.get('الحالة'))
         user_message = f"✏️ *تم تحديث معاملتك {id}*\n"
@@ -621,7 +646,6 @@ def view_transaction_page(id):
             logger.error("❌ sheets_client غير متصل")
             return "⚠️ النظام غير متصل بقاعدة البيانات", 500
 
-        # جلب بيانات المعاملة مباشرة
         row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
         if not row_info:
             logger.warning(f"❌ المعاملة {id} غير موجودة")
@@ -832,97 +856,103 @@ EDIT_HTML = """
             setTimeout(() => msgDiv.classList.remove('opacity-100'), 3000);
         }
 
-        fetch(`/api/transaction/${id}`)
-            .then(res => res.ok ? res.json() : Promise.reject())
-            .then(data => {
-                const readonlyKeys = [
-                    'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
-                    'القسم', 'نوع المعاملة', 'المرافقات'
-                ];
-                const rc = document.getElementById('readonly-fields');
-                rc.innerHTML = '';
-                readonlyKeys.forEach(key => {
-                    if (data[key] !== undefined) {
-                        const value = data[key] || '-';
-                        let display = value;
-                        if (key === 'المرافقات' && value.startsWith('http')) {
-                            display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
-                        }
-                        rc.innerHTML += `
-                            <div class="bg-gray-50 p-3 rounded-xl">
-                                <span class="label-ios">${key}</span>
-                                <div class="text-gray-900 mt-1">${display}</div>
-                            </div>
-                        `;
+        Promise.all([
+            fetch(`/api/transaction/${id}`).then(r => r.json()),
+            fetch('/api/headers').then(r => r.json())
+        ]).then(([data, headers]) => {
+            const readonlyKeys = [
+                'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
+                'القسم', 'نوع المعاملة', 'المرافقات', 'ID'
+            ];
+            const excludedKeys = ['LOG_JSON', 'الرابط'];
+
+            // عرض الحقول للقراءة فقط
+            const rc = document.getElementById('readonly-fields');
+            rc.innerHTML = '';
+            readonlyKeys.forEach(key => {
+                if (data[key] !== undefined) {
+                    const value = data[key] || '-';
+                    let display = value;
+                    if (key === 'المرافقات' && value.startsWith('http')) {
+                        display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
                     }
-                });
-
-                const excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط'];
-                const editableKeys = Object.keys(data).filter(k => !readonlyKeys.includes(k) && !excluded.includes(k));
-                const ec = document.getElementById('editable-fields');
-                ec.innerHTML = '';
-
-                editableKeys.forEach(key => {
-                    let inputType = 'text';
-                    let options = '';
-
-                    if (key.includes('تاريخ')) {
-                        inputType = 'date';
-                    } else if (key === 'الحالة') {
-                        inputType = 'select';
-                        options = `
-                            <select name="${key}" class="ios-select">
-                                <option value="جديد" ${data[key] === 'جديد' ? 'selected' : ''}>جديد</option>
-                                <option value="قيد المعالجة" ${data[key] === 'قيد المعالجة' ? 'selected' : ''}>قيد المعالجة</option>
-                                <option value="مكتملة" ${data[key] === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
-                                <option value="متأخرة" ${data[key] === 'متأخرة' ? 'selected' : ''}>متأخرة</option>
-                            </select>
-                        `;
-                    } else if (key === 'التأخير') {
-                        inputType = 'select';
-                        options = `
-                            <select name="${key}" class="ios-select">
-                                <option value="لا" ${data[key] !== 'نعم' ? 'selected' : ''}>لا</option>
-                                <option value="نعم" ${data[key] === 'نعم' ? 'selected' : ''}>نعم</option>
-                            </select>
-                        `;
-                    } else if (key === 'الأولوية') {
-                        inputType = 'select';
-                        options = `
-                            <select name="${key}" class="ios-select">
-                                <option value="عادية" ${data[key] !== 'مستعجلة' ? 'selected' : ''}>عادية</option>
-                                <option value="مستعجلة" ${data[key] === 'مستعجلة' ? 'selected' : ''}>مستعجلة</option>
-                            </select>
-                        `;
-                    }
-
-                    if (inputType === 'select') {
-                        ec.innerHTML += `
-                            <div>
-                                <label class="label-ios">${key}</label>
-                                ${options}
-                            </div>
-                        `;
-                    } else if (inputType === 'date') {
-                        ec.innerHTML += `
-                            <div>
-                                <label class="label-ios">${key}</label>
-                                <input type="date" name="${key}" value="${data[key] ? data[key].split('T')[0] : ''}" class="ios-input">
-                            </div>
-                        `;
-                    } else {
-                        ec.innerHTML += `
-                            <div>
-                                <label class="label-ios">${key}</label>
-                                <input type="text" name="${key}" value="${data[key] || ''}" class="ios-input">
-                            </div>
-                        `;
-                    }
-                });
-            })
-            .catch(() => {
-                document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة</div>';
+                    rc.innerHTML += `
+                        <div class="bg-gray-50 p-3 rounded-xl">
+                            <span class="label-ios">${key}</span>
+                            <div class="text-gray-900 mt-1">${display}</div>
+                        </div>
+                    `;
+                }
             });
+
+            // بناء الحقول القابلة للتعديل من العناوين الكاملة
+            const editableKeys = headers.filter(key => 
+                !readonlyKeys.includes(key) && !excludedKeys.includes(key)
+            );
+            const ec = document.getElementById('editable-fields');
+            ec.innerHTML = '';
+
+            editableKeys.forEach(key => {
+                let inputType = 'text';
+                let options = '';
+
+                if (key.includes('تاريخ')) {
+                    inputType = 'date';
+                } else if (key === 'الحالة') {
+                    inputType = 'select';
+                    options = `
+                        <select name="${key}" class="ios-select">
+                            <option value="جديد" ${data[key] === 'جديد' ? 'selected' : ''}>جديد</option>
+                            <option value="قيد المعالجة" ${data[key] === 'قيد المعالجة' ? 'selected' : ''}>قيد المعالجة</option>
+                            <option value="مكتملة" ${data[key] === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
+                            <option value="متأخرة" ${data[key] === 'متأخرة' ? 'selected' : ''}>متأخرة</option>
+                        </select>
+                    `;
+                } else if (key === 'التأخير') {
+                    inputType = 'select';
+                    options = `
+                        <select name="${key}" class="ios-select">
+                            <option value="لا" ${data[key] !== 'نعم' ? 'selected' : ''}>لا</option>
+                            <option value="نعم" ${data[key] === 'نعم' ? 'selected' : ''}>نعم</option>
+                        </select>
+                    `;
+                } else if (key === 'الأولوية') {
+                    inputType = 'select';
+                    options = `
+                        <select name="${key}" class="ios-select">
+                            <option value="عادية" ${data[key] !== 'مستعجلة' ? 'selected' : ''}>عادية</option>
+                            <option value="مستعجلة" ${data[key] === 'مستعجلة' ? 'selected' : ''}>مستعجلة</option>
+                        </select>
+                    `;
+                }
+
+                const currentValue = data[key] || '';
+                if (inputType === 'select') {
+                    ec.innerHTML += `
+                        <div>
+                            <label class="label-ios">${key}</label>
+                            ${options}
+                        </div>
+                    `;
+                } else if (inputType === 'date') {
+                    ec.innerHTML += `
+                        <div>
+                            <label class="label-ios">${key}</label>
+                            <input type="date" name="${key}" value="${currentValue.split('T')[0] || ''}" class="ios-input">
+                        </div>
+                    `;
+                } else {
+                    ec.innerHTML += `
+                        <div>
+                            <label class="label-ios">${key}</label>
+                            <input type="text" name="${key}" value="${currentValue}" class="ios-input">
+                        </div>
+                    `;
+                }
+            });
+        }).catch(() => {
+            document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة أو حدث خطأ في تحميل البيانات</div>';
+        });
 
         document.getElementById('editForm').addEventListener('submit', async (e) => {
             e.preventDefault();
