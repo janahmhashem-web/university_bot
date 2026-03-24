@@ -90,7 +90,6 @@ def save_user_chat(transaction_id, chat_id):
         logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
 # ------------------ دوال البوت الأساسية ------------------
-# (تبقى كما هي من الكود السابق – أضفتها كاملة في المرفق النهائي)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -380,12 +379,12 @@ def check_new_transactions():
                         logger.error(f"❌ فشل كتابة ID للصف {row_number}: {e}")
                         continue
 
-                # كتابة رابط العرض في العمود U (21)
-                view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
-                hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
+                # كتابة رابط التعديل في العمود U (21)
+                edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
+                hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
                 try:
                     ws.update_cell(row_number, 21, hyperlink_formula)
-                    logger.info(f"🔗 تم كتابة رابط العرض في العمود U للصف {row_number}")
+                    logger.info(f"🔗 تم كتابة رابط التعديل في العمود U للصف {row_number}")
                 except Exception as e:
                     logger.error(f"❌ فشل كتابة الرابط للصف {row_number}: {e}")
 
@@ -394,9 +393,9 @@ def check_new_transactions():
                 if qr_ws:
                     name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
                     email = new_row.get('البريد الإلكتروني', '')
+                    view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
                     qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
                     qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
-                    edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"  # رابط التعديل للموظف
 
                     qr_ws.append_row([
                         name,
@@ -411,13 +410,13 @@ def check_new_transactions():
                     qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
                     qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
                     qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
-                    qr_ws.update_cell(new_row_num, 7, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')  # رابط التعديل
+                    qr_ws.update_cell(new_row_num, 7, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
                 # تسجيل في TransactionHistory
                 sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام")
 
-                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً
+                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً (يتم عبر notify_user)
                 if background_loop and bot_app:
                     asyncio.run_coroutine_threadsafe(
                         notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})"),
@@ -498,7 +497,7 @@ def api_transaction(id):
                 col = headers.index(key) + 1
                 ws.update_cell(row, col, value)
 
-        # تحديث أعمدة التتبع (آخر تعديل بواسطة، آخر تعديل بتاريخ، عدد التعديلات)
+        # تحديث أعمدة التتبع
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now().isoformat()
 
@@ -664,10 +663,10 @@ def view_transaction_page(id):
             records = history_ws.get_all_records()
             history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
                        for r in records if str(r.get('ID')) == id]
-            history.sort(key=lambda x: x['time'], reverse=True)
+            history.sort(key=lambda x: x['time'], reverse=False)  # تصاعدي لعرض من الأقدم للأحدث
             logger.info(f"✅ تم جلب {len(history)} سجل تتبع للمعاملة {id}")
 
-        # بناء HTML
+        # بناء HTML بتصميم عصري
         html = f"""
         <!DOCTYPE html>
         <html dir="rtl" lang="ar">
@@ -676,60 +675,82 @@ def view_transaction_page(id):
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>تفاصيل المعاملة {id}</title>
             <script src="https://cdn.tailwindcss.com"></script>
+            <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
             <style>
                 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
                 * {{ font-family: 'Inter', sans-serif; }}
-                .ios-card {{ background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }}
-                .label-ios {{ font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }}
-                .timeline-item {{ border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }}
+                .ios-card {{ background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 24px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }}
+                .label-ios {{ font-size: 13px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }}
+                .timeline-item {{ border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 24px; }}
                 .timeline-dot {{ width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }}
+                .timeline-time {{ font-size: 12px; color: #6c757d; margin-bottom: 4px; }}
+                .timeline-action {{ font-weight: 600; color: #1f2937; margin-bottom: 4px; }}
+                .timeline-user {{ font-size: 12px; color: #9ca3af; }}
+                .badge {{ display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }}
+                .badge-new {{ background: #e2e3e5; color: #383d41; }}
+                .badge-processing {{ background: #fff3cd; color: #856404; }}
+                .badge-completed {{ background: #d4edda; color: #155724; }}
+                .badge-delayed {{ background: #f8d7da; color: #721c24; }}
             </style>
         </head>
-        <body class="bg-gray-100 p-4">
-            <div class="max-w-3xl mx-auto">
+        <body class="bg-gradient-to-b from-gray-50 to-gray-100 p-4">
+            <div class="max-w-4xl mx-auto">
                 <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
                     <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span class="text-blue-600">{id}</span></h1>
-                    <span class="text-gray-500 text-sm">(للمتابعة فقط)</span>
+                    <span class="text-gray-500 text-sm bg-white/50 px-3 py-1 rounded-full">(للمتابعة فقط)</span>
                 </div>
 
-                <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-                    <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📋 <span>معلومات المعاملة</span></h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
         """
         excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط', 'عدد التعديلات', 'البريد الإلكتروني الموظف']
         for key, value in data.items():
             if key not in excluded:
-                display_value = value if value else '-'
+                display_value = value if value else '—'
                 if key == 'المرافقات' and value and value.startswith('http'):
                     display_value = f'<a href="{value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>'
+                # تلوين الحالة
+                if key == 'الحالة':
+                    badge_class = "badge-new" if value == "جديد" else ("badge-processing" if value == "قيد المعالجة" else ("badge-completed" if value == "مكتملة" else ("badge-delayed" if value == "متأخرة" else "")))
+                    display_value = f'<span class="badge {badge_class}">{value if value else "—"}</span>'
                 html += f"""
-                        <div class="bg-gray-50 p-3 rounded-xl">
+                        <div class="bg-gray-50/80 p-4 rounded-xl">
                             <span class="label-ios">{key}</span>
-                            <div class="text-gray-900 mt-1">{display_value}</div>
+                            <div class="text-gray-900 mt-1 font-medium">{display_value}</div>
                         </div>
                 """
         html += """
                     </div>
                 </div>
 
-                <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-                    <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
-                    <div id="history-timeline" class="space-y-2">
+                <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
+                    <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📜 <span>سجل الحركات</span></h2>
+                    <div class="space-y-2">
         """
         if history:
             for entry in history:
+                # تنسيق الوقت
+                try:
+                    dt = datetime.fromisoformat(entry['time'])
+                    time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    time_str = entry['time']
                 html += f"""
                         <div class="timeline-item">
                             <span class="timeline-dot"></span>
-                            <span class="text-sm text-gray-500">{entry['time']}</span>
-                            <p class="text-gray-800">{entry['action']}</p>
-                            <p class="text-xs text-gray-400">{entry['user']}</p>
+                            <div class="timeline-time">{time_str}</div>
+                            <div class="timeline-action">{entry['action']}</div>
+                            <div class="timeline-user">بواسطة: {entry['user']}</div>
                         </div>
                 """
         else:
-            html += '<p class="text-gray-500">لا يوجد سجل</p>'
+            html += '<p class="text-gray-500 text-center py-8">لا يوجد سجل بعد</p>'
         html += """
                     </div>
+                </div>
+                <div class="text-center text-gray-400 text-sm mt-6">
+                    يمكنك متابعة معاملتك عبر البوت: <a href="https://t.me/""" + Config.BOT_USERNAME + f"""?start={id}" class="text-blue-500 underline">@{Config.BOT_USERNAME}</a>
                 </div>
             </div>
         </body>
@@ -752,45 +773,45 @@ EDIT_HTML = """
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
         * { font-family: 'Inter', sans-serif; }
-        .ios-card { background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }
-        .ios-input { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 16px; font-size: 16px; width: 100%; }
+        .ios-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 24px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
+        .ios-input { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 16px; padding: 12px 16px; font-size: 16px; width: 100%; transition: all 0.2s; }
         .ios-input:focus { border-color: #007aff; outline: none; box-shadow: 0 0 0 3px rgba(0,122,255,0.1); }
-        .ios-select { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px 16px; font-size: 16px; width: 100%; }
-        .label-ios { font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }
-        .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }
+        .ios-select { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 16px; padding: 12px 16px; font-size: 16px; width: 100%; }
+        .label-ios { font-size: 13px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }
+        .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 24px; }
         .timeline-dot { width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }
-        /* تلوين الحالات */
-        .status-new { background-color: #e2e3e5; color: #383d41; }
-        .status-processing { background-color: #fff3cd; color: #856404; }
-        .status-completed { background-color: #d4edda; color: #155724; }
-        .status-delayed { background-color: #f8d7da; color: #721c24; }
+        .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .badge-new { background: #e2e3e5; color: #383d41; }
+        .badge-processing { background: #fff3cd; color: #856404; }
+        .badge-completed { background: #d4edda; color: #155724; }
+        .badge-delayed { background: #f8d7da; color: #721c24; }
     </style>
 </head>
-<body class="bg-gray-100 p-4">
-    <div class="max-w-3xl mx-auto">
+<body class="bg-gradient-to-b from-gray-50 to-gray-100 p-4">
+    <div class="max-w-4xl mx-auto">
         <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm">
             <h1 class="text-xl font-semibold">🔍 تتبع المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
         </div>
 
-        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-3">📋 معلومات أساسية</h2>
-            <div id="readonly-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+        <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📋 <span>معلومات أساسية</span></h2>
+            <div id="readonly-fields" class="grid grid-cols-1 md:grid-cols-2 gap-5"></div>
         </div>
 
-        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-3">✏️ تحديث البيانات</h2>
-            <form id="editForm" class="space-y-4">
-                <div id="editable-fields" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+        <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">✏️ <span>تحديث البيانات</span></h2>
+            <form id="editForm" class="space-y-5">
+                <div id="editable-fields" class="grid grid-cols-1 md:grid-cols-2 gap-5"></div>
                 <button type="submit" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-4 rounded-xl transition shadow-sm">💾 حفظ التغييرات</button>
             </form>
         </div>
 
-        <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
+        <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
+            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📜 <span>سجل الحركات</span></h2>
             <div id="history-timeline" class="space-y-2"></div>
         </div>
 
-        <div id="message" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg opacity-0 transition-opacity"></div>
+        <div id="message" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg opacity-0 transition-opacity z-50"></div>
     </div>
 
     <script>
@@ -822,21 +843,21 @@ EDIT_HTML = """
             rc.innerHTML = '';
             readonlyKeys.forEach(key => {
                 if (data[key] !== undefined) {
-                    const value = data[key] || '-';
+                    const value = data[key] || '—';
                     let display = value;
                     if (key === 'المرافقات' && value.startsWith('http')) {
                         display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
                     }
                     rc.innerHTML += `
-                        <div class="bg-gray-50 p-3 rounded-xl">
+                        <div class="bg-gray-50/80 p-4 rounded-xl">
                             <span class="label-ios">${key}</span>
-                            <div class="text-gray-900 mt-1">${display}</div>
+                            <div class="text-gray-900 mt-1 font-medium">${display}</div>
                         </div>
                     `;
                 }
             });
 
-            // بناء الحقول القابلة للتعديل من العناوين الكاملة
+            // بناء الحقول القابلة للتعديل
             const editableKeys = headers.filter(key => 
                 !readonlyKeys.includes(key) && !excludedKeys.includes(key)
             );
@@ -851,9 +872,8 @@ EDIT_HTML = """
                     inputType = 'date';
                 } else if (key === 'الحالة') {
                     inputType = 'select';
-                    const statusClass = data[key] === 'جديد' ? 'status-new' : (data[key] === 'قيد المعالجة' ? 'status-processing' : (data[key] === 'مكتملة' ? 'status-completed' : (data[key] === 'متأخرة' ? 'status-delayed' : '')));
                     options = `
-                        <select name="${key}" class="ios-select ${statusClass}" onchange="updateStatusColor(this)">
+                        <select name="${key}" class="ios-select" onchange="updateStatusColor(this)">
                             <option value="جديد" ${data[key] === 'جديد' ? 'selected' : ''}>جديد</option>
                             <option value="قيد المعالجة" ${data[key] === 'قيد المعالجة' ? 'selected' : ''}>قيد المعالجة</option>
                             <option value="مكتملة" ${data[key] === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
@@ -907,11 +927,12 @@ EDIT_HTML = """
         });
 
         function updateStatusColor(select) {
-            select.className = 'ios-select ' + 
-                (select.value === 'جديد' ? 'status-new' : 
-                 (select.value === 'قيد المعالجة' ? 'status-processing' : 
-                  (select.value === 'مكتملة' ? 'status-completed' : 
-                   (select.value === 'متأخرة' ? 'status-delayed' : ''))));
+            // إزالة الفئات القديمة وإضافة الجديدة حسب القيمة
+            select.classList.remove('badge-new', 'badge-processing', 'badge-completed', 'badge-delayed');
+            if (select.value === 'جديد') select.classList.add('badge-new');
+            else if (select.value === 'قيد المعالجة') select.classList.add('badge-processing');
+            else if (select.value === 'مكتملة') select.classList.add('badge-completed');
+            else if (select.value === 'متأخرة') select.classList.add('badge-delayed');
         }
 
         document.getElementById('editForm').addEventListener('submit', async (e) => {
@@ -936,7 +957,7 @@ EDIT_HTML = """
             fetch(`/api/history/${id}`).then(r => r.json()).then(h => {
                 const t = document.getElementById('history-timeline');
                 if (h.length === 0) {
-                    t.innerHTML = '<p class="text-gray-500">لا يوجد سجل</p>';
+                    t.innerHTML = '<p class="text-gray-500 text-center py-8">لا يوجد سجل</p>';
                     return;
                 }
                 let html = '';
@@ -944,9 +965,9 @@ EDIT_HTML = """
                     html += `
                         <div class="timeline-item">
                             <span class="timeline-dot"></span>
-                            <span class="text-sm text-gray-500">${i.time}</span>
-                            <p class="text-gray-800">${i.action}</p>
-                            <p class="text-xs text-gray-400">${i.user}</p>
+                            <div class="timeline-time">${i.time}</div>
+                            <div class="timeline-action">${i.action}</div>
+                            <div class="timeline-user">بواسطة: ${i.user}</div>
                         </div>
                     `;
                 });
@@ -988,7 +1009,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                    </tr>
+                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
              </table>
@@ -1022,7 +1043,6 @@ INDEX_HTML = """<!DOCTYPE html>
 
 @app.route('/')
 def index():
-    # حماية صفحة المدير بكلمة مرور من خلال query parameter
     token = request.args.get('token')
     if not token or token != Config.ADMIN_SECRET:
         abort(403)
@@ -1038,14 +1058,33 @@ def qr_page(id):
     <html dir="rtl">
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>QR Code للمعاملة {id}</title>
         <style>
-            body {{ display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f5f5f5; }}
-            img {{ max-width: 90%; max-height: 90%; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }}
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; text-align: center; }}
+            .card {{ max-width: 500px; margin: 50px auto; background: white; border-radius: 24px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); padding: 30px; }}
+            .qr {{ margin: 20px 0; }}
+            .instruction {{ background: #f8f9fa; border-radius: 16px; padding: 15px; margin-top: 20px; text-align: right; }}
+            .btn {{ display: inline-block; background: #2c3e50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 40px; margin: 10px 5px; transition: 0.3s; }}
+            .btn-telegram {{ background: #0088cc; }}
+            .btn:hover {{ opacity: 0.9; transform: translateY(-2px); }}
         </style>
     </head>
     <body>
-        <img src="data:image/png;base64,{qr_base64}" alt="QR Code للمعاملة {id}">
+        <div class="card">
+            <h2>📱 رمز QR للمعاملة</h2>
+            <div class="qr">
+                <img src="data:image/png;base64,{qr_base64}" alt="QR Code للمعاملة {id}" style="width: 200px; height: 200px;">
+            </div>
+            <div class="instruction">
+                <p><strong>🔹 تعليمات التتبع:</strong></p>
+                <p>1️⃣ افتح كاميرا هاتفك وامسح الرمز.</p>
+                <p>2️⃣ سيتم نقلك إلى صفحة تفاصيل المعاملة.</p>
+                <p>3️⃣ يمكنك متابعة المعاملة عبر البوت:</p>
+                <a href="https://t.me/{Config.BOT_USERNAME}?start={id}" class="btn btn-telegram">📱 فتح البوت</a>
+                <p style="margin-top: 15px; font-size: 12px; color: #6c757d;">⚠️ احتفظ بهذا الرقم لمتابعة المعاملة: <strong>{id}</strong></p>
+            </div>
+        </div>
     </body>
     </html>
     """

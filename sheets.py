@@ -26,7 +26,6 @@ class GoogleSheetsClient:
             raise
 
     def _init_sheets(self):
-        """إنشاء الأوراق المطلوبة وإضافة الأعمدة الأساسية"""
         from config import Config
 
         sheets_required = {
@@ -89,8 +88,3 @@ class GoogleSheetsClient:
                 ws.append_row([datetime.now().isoformat(), transaction_id, action, user])
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
-
-    def update_cell(self, sheet_name, row, col, value):
-        ws = self.get_worksheet(sheet_name)
-        if ws:
-            ws.update_cell(row, col, value)

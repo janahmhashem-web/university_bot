@@ -5,7 +5,7 @@ class Config:
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
     BOT_USERNAME = os.getenv("BOT_USERNAME", "mtu_jit_bot")
     ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-    ADMIN_SECRET = os.getenv("ADMIN_SECRET", "mysecret")  # كلمة مرور صفحة المدير
+    ADMIN_SECRET = os.getenv("ADMIN_SECRET", "mysecret")
 
     # Web App URL
     WEB_APP_URL = os.getenv("WEB_APP_URL", "https://universitybot-production.up.railway.app")
