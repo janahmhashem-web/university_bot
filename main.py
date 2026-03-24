@@ -50,6 +50,7 @@ except Exception as e:
 
 # ------------------ دوال مساعدة ------------------
 async def notify_user(transaction_id, message):
+    """إرسال إشعار للمستخدم المرتبط بالمعاملة عبر البوت"""
     if not sheets_client or not bot_app or not background_loop:
         return
     try:
@@ -71,6 +72,7 @@ async def notify_user(transaction_id, message):
         logger.error(f"فشل إرسال إشعار للمستخدم: {e}")
 
 def save_user_chat(transaction_id, chat_id):
+    """حفظ chat_id في ورقة users"""
     try:
         ws = sheets_client.get_worksheet(Config.SHEET_USERS)
         if not ws:
@@ -623,50 +625,8 @@ def verify_page():
     name = request.args.get('name', '').strip()
     phone = request.args.get('phone', '').strip()
 
-    if name and phone:
-        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-        if ws:
-            records = ws.get_all_records()
-            for row in records:
-                # تنظيف البيانات: إزالة المسافات الزائدة وتحويل إلى نص
-                row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
-                row_phone = str(row.get('رقم الهاتف', '')).strip()
-                # قارن الاسم والهاتف بعد التنظيف
-                if row_name == name.lower() and row_phone == phone:
-                    transaction_id = row.get('ID')
-                    if transaction_id:
-                        return f"""
-                        <!DOCTYPE html>
-                        <html dir="rtl">
-                        <head>
-                            <meta charset="UTF-8">
-                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                            <title>معاملتك</title>
-                            <style>
-                                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; text-align: center; }}
-                                .card {{ max-width: 500px; margin: 50px auto; background: white; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }}
-                                .id {{ font-size: 28px; font-weight: bold; color: #e67e22; background: #fef5e8; display: inline-block; padding: 8px 20px; border-radius: 40px; margin: 15px 0; letter-spacing: 1px; }}
-                                .btn {{ display: inline-block; background: #2c3e50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 10px 5px; transition: 0.3s; }}
-                                .btn-telegram {{ background: #0088cc; }}
-                                .btn:hover {{ opacity: 0.9; transform: translateY(-2px); }}
-                            </style>
-                        </head>
-                        <body>
-                            <div class="card">
-                                <h2>✅ تم العثور على معاملتك</h2>
-                                <p>رقم المعاملة الخاص بك:</p>
-                                <div class="id">{transaction_id}</div>
-                                <p>احتفظ بهذا الرقم لمتابعة المعاملة.</p>
-                                <a href="{Config.WEB_APP_URL}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
-                                <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت لمتابعة المعاملة</a>
-                            </div>
-                        </body>
-                        </html>
-                        """
-            return "<html dir='rtl'><body style='text-align:center;margin-top:50px;'><h2>❌ لم نجد معاملة بهذه البيانات</h2></body></html>"
-        else:
-            return "<html dir='rtl'><body style='text-align:center;margin-top:50px;'><h2>⚠️ مشكلة في الاتصال بقاعدة البيانات</h2></body></html>"
-    else:
+    # إذا لم يصل اسم وهاتف، اعرض النموذج
+    if not name or not phone:
         return '''
         <!DOCTYPE html>
         <html dir="rtl">
@@ -695,6 +655,78 @@ def verify_page():
         </html>
         '''
 
+    # البحث عن المعاملة
+    if not sheets_client:
+        return "<html dir='rtl'><body><h2>⚠️ النظام غير متصل بقاعدة البيانات</h2></body></html>"
+
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if not ws:
+        return "<html dir='rtl'><body><h2>⚠️ ورقة manager غير موجودة</h2></body></html>"
+
+    records = ws.get_all_records()
+    found = False
+    transaction_id = None
+
+    # طباعة للتصحيح في سجلات Railway
+    logger.info(f"🔍 البحث عن: الاسم='{name}', الهاتف='{phone}'")
+    logger.info(f"📊 عدد السجلات في الشيت: {len(records)}")
+
+    for idx, row in enumerate(records):
+        row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip()
+        row_phone = str(row.get('رقم الهاتف', '')).strip()
+        logger.info(f"📋 صف {idx+2}: الاسم='{row_name}', الهاتف='{row_phone}'")
+        
+        if row_name == name and row_phone == phone:
+            transaction_id = row.get('ID')
+            if transaction_id:
+                found = True
+                logger.info(f"✅ تم العثور على المعاملة: {transaction_id}")
+                break
+
+    if found and transaction_id:
+        return f"""
+        <!DOCTYPE html>
+        <html dir="rtl">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>معاملتك</title>
+            <style>
+                body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; text-align: center; }}
+                .card {{ max-width: 500px; margin: 50px auto; background: white; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 30px; }}
+                .id {{ font-size: 28px; font-weight: bold; color: #e67e22; background: #fef5e8; display: inline-block; padding: 8px 20px; border-radius: 40px; margin: 15px 0; letter-spacing: 1px; }}
+                .btn {{ display: inline-block; background: #2c3e50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; margin: 10px 5px; transition: 0.3s; }}
+                .btn-telegram {{ background: #0088cc; }}
+                .btn:hover {{ opacity: 0.9; transform: translateY(-2px); }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h2>✅ تم العثور على معاملتك</h2>
+                <p>رقم المعاملة الخاص بك:</p>
+                <div class="id">{transaction_id}</div>
+                <p>احتفظ بهذا الرقم لمتابعة المعاملة.</p>
+                <a href="{Config.WEB_APP_URL}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
+                <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت لمتابعة المعاملة</a>
+            </div>
+        </body>
+        </html>
+        """
+    else:
+        # عرض رسالة خطأ مع تفاصيل
+        return f"""
+        <!DOCTYPE html>
+        <html dir="rtl">
+        <body style="text-align:center;margin-top:50px;">
+            <h2>❌ لم نجد معاملة بهذه البيانات</h2>
+            <p>الاسم المدخل: "{name}"</p>
+            <p>رقم الهاتف المدخل: "{phone}"</p>
+            <p>الرجاء التأكد من صحة البيانات وخلوها من الأخطاء الإملائية أو المسافات.</p>
+            <p><a href="/verify">🔍 محاولة مرة أخرى</a></p>
+        </body>
+        </html>
+        """
+
 # ------------------ صفحة عرض المعاملة (للقراءة فقط) ------------------
 @app.route('/view/<id>')
 def view_transaction_page(id):
@@ -718,7 +750,7 @@ def view_transaction_page(id):
             records = history_ws.get_all_records()
             history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
                        for r in records if str(r.get('ID')) == id]
-            history.sort(key=lambda x: x['time'], reverse=False)  # تصاعدي لعرض من الأقدم للأحدث
+            history.sort(key=lambda x: x['time'], reverse=False)
             logger.info(f"✅ تم جلب {len(history)} سجل تتبع للمعاملة {id}")
 
         # بناء HTML بتصميم عصري
@@ -1059,10 +1091,10 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                    </tr>
+                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-            </table>
+             </table>
         </div>
     </div>
     <script>
