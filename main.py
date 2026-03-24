@@ -9,8 +9,8 @@ import time
 import random
 import base64
 from flask import Flask, request, jsonify, render_template_string, Response, abort
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import atexit
@@ -291,7 +291,6 @@ def register_transaction():
                     const submitBtn = document.getElementById('submitBtn');
                     const resultDiv = document.getElementById('result');
                     
-                    // تعطيل الزر ومنع الإرسال المتكرر
                     submitBtn.disabled = true;
                     const originalText = submitBtn.textContent;
                     submitBtn.textContent = 'جاري الإرسال...';
@@ -316,7 +315,6 @@ def register_transaction():
                                 </div>
                             `;
                             resultDiv.classList.add('success');
-                            // لا نعيد تمكين الزر لأن العملية انتهت بنجاح، يمكن إبقاؤه معطلاً.
                         } else {
                             resultDiv.innerHTML = `❌ فشل التسجيل: ${json.error || 'خطأ غير معروف'}`;
                             resultDiv.classList.add('error');
@@ -337,7 +335,7 @@ def register_transaction():
     else:
         return "Use /api/submit", 405
 
-# ------------------ دوال البوت (بدون تغيير) ------------------
+# ------------------ دوال البوت الأساسية ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -360,17 +358,68 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
 
-    msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
-    msg += "📌 *للاستفادة من البوت:*\n"
-    msg += "🔹 `/id [رقم]` - تفاصيل معاملة\n"
-    msg += "🔹 `/history [رقم]` - سجل تتبع كامل للمعاملة (من البداية إلى النهاية)\n"
-    msg += "🔹 `/qr` - تعليمات حول طباعة رمز QR لتتبع المعاملة\n"
-    msg += "🔹 `/support` - للتواصل مع فريق الدعم\n"
-    msg += "🔹 `/wake` - للتأكد من أن البوت يعمل\n"
+    # لوحة الأزرار التفاعلية
+    keyboard = [
+        [InlineKeyboardButton("🔍 تفاصيل معاملة", callback_data="cmd_id")],
+        [InlineKeyboardButton("📜 سجل تتبع معاملة", callback_data="cmd_history")],
+        [InlineKeyboardButton("📱 تعليمات QR", callback_data="cmd_qr")],
+        [InlineKeyboardButton("💬 التواصل مع الدعم", callback_data="cmd_support")],
+    ]
     if is_admin:
-        msg += "\n👑 *أوامر المدير:*\n"
-        msg += "🔹 `/stats` - إحصائيات عامة\n"
-    await update.message.reply_text(msg, parse_mode='Markdown')
+        keyboard.append([InlineKeyboardButton("📊 إحصائيات", callback_data="cmd_stats")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
+    msg += "يمكنك استخدام الأزرار أدناه للوصول إلى الخدمات بسهولة:\n"
+    await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "cmd_id":
+        await query.edit_message_text(
+            "📌 أرسل رقم المعاملة (ID) لمعرفة تفاصيلها.\n\n"
+            "مثال: `/id MUT-20260324123456-1234`",
+            parse_mode='Markdown'
+        )
+    elif data == "cmd_history":
+        await query.edit_message_text(
+            "📌 أرسل رقم المعاملة (ID) لمعرفة سجل تتبعها.\n\n"
+            "مثال: `/history MUT-20260324123456-1234`",
+            parse_mode='Markdown'
+        )
+    elif data == "cmd_qr":
+        await query.edit_message_text(
+            "📱 *كيفية استخدام رمز QR لتتبع المعاملة*\n\n"
+            "1️⃣ قم بطباعة رمز QR الموجود في صفحة المعاملة.\n"
+            "2️⃣ الصق الورقة مع المعاملة في مكان واضح.\n"
+            "3️⃣ عند مسح الرمز، ستظهر صفحة التتبع.\n"
+            "4️⃣ يمكن لأي شخص لديه الرابط متابعة المعاملة.\n\n"
+            "💡 *نصيحة:* احتفظ بالورقة في ملف المعاملة لتسهيل التتبع.",
+            parse_mode='Markdown'
+        )
+    elif data == "cmd_support":
+        await query.edit_message_text(
+            "📨 لإرسال رسالة إلى فريق الدعم، استخدم الأمر `/support`.\n"
+            "سنتواصل معك في أقرب وقت.",
+            parse_mode='Markdown'
+        )
+    elif data == "cmd_stats":
+        user_id = update.effective_user.id
+        if user_id != Config.ADMIN_CHAT_ID:
+            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
+            return
+        if not sheets_client:
+            await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
+            return
+        records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+        total = len(records)
+        completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
+        pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
+        msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
+        await query.edit_message_text(msg, parse_mode='Markdown')
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -548,6 +597,7 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("stats", stats))
         bot_app.add_handler(CommandHandler("qr", qr_command))
         bot_app.add_handler(CommandHandler("support", support_command))
+        bot_app.add_handler(CallbackQueryHandler(button_callback))  # الأزرار التفاعلية
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
         logger.info("✅ تم بناء البوت وإضافة المعالجات")
 
@@ -1248,10 +1298,10 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="px-4 py-2 text-right">الحالة</th>
                         <th class="px-4 py-2 text-right">الموظف</th>
                         <th class="px-4 py-2 text-right"></th>
-                     </tr>
+                    \\
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+            表
         </div>
     </div>
     <script>
@@ -1259,12 +1309,12 @@ INDEX_HTML = """<!DOCTYPE html>
             const tbody = document.getElementById('transactions');
             data.forEach(t => {
                 const row = `<tr class="border-t">
-                    <td class="px-4 py-2">${t.id}</td>
+                    <td class="px-4 py-2">${t.id}${t.id}</td>
                     <td class="px-4 py-2">${t.name}</td>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                 <\/tr>`;
                 tbody.innerHTML += row;
             });
         });
