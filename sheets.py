@@ -23,7 +23,7 @@ class GoogleSheetsClient:
             # بناء خدمة Google Drive
             self.drive_service = build('drive', 'v3', credentials=creds)
             # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي للجدول
-            self.spreadsheet = self.client.open("اسم_جدولك")
+            self.spreadsheet = self.client.open("university system")
             logger.info("✅ تم الاتصال بـ Google Sheets")
             self._init_sheets()
         except Exception as e:
