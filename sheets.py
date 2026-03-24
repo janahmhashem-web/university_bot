@@ -20,14 +20,13 @@ class GoogleSheetsClient:
             # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي للجدول
             self.spreadsheet = self.client.open("university system")
             logger.info("✅ تم الاتصال بـ Google Sheets")
-            # إنشاء الأوراق المطلوبة وتعبئة الأعمدة الأساسية
             self._init_sheets()
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
     def _init_sheets(self):
-        """إنشاء الأوراق المطلوبة إذا لم تكن موجودة، وإضافة الأعمدة الأساسية"""
+        """إنشاء الأوراق المطلوبة وإضافة الأعمدة الأساسية"""
         from config import Config
 
         sheets_required = {
@@ -40,7 +39,7 @@ class GoogleSheetsClient:
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON"
             ],
             Config.SHEET_HISTORY: ["timestamp", "ID", "action", "user"],
-            Config.SHEET_QR: ["name", "email", "transaction_id", "view_link", "qr_image_url", "qr_page_link"],
+            Config.SHEET_QR: ["name", "email", "transaction_id", "view_link", "qr_image_url", "qr_page_link", "edit_link"],
             Config.SHEET_USERS: ["transaction_id", "chat_id"]
         }
 
@@ -48,13 +47,11 @@ class GoogleSheetsClient:
             try:
                 ws = self.get_worksheet(sheet_name)
                 if ws is None:
-                    # إنشاء الورقة
                     ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(required_headers))
                     for col, header in enumerate(required_headers, 1):
                         ws.update_cell(1, col, header)
                     logger.info(f"✅ تم إنشاء الورقة '{sheet_name}' مع الأعمدة المطلوبة")
                 else:
-                    # التأكد من وجود الأعمدة (إضافة المفقودة)
                     existing_headers = ws.row_values(1)
                     for col, header in enumerate(required_headers, 1):
                         if header not in existing_headers:
@@ -86,7 +83,6 @@ class GoogleSheetsClient:
         return None
 
     def add_history_entry(self, transaction_id, action, user="النظام"):
-        """إضافة إدخال إلى سجل التتبع"""
         try:
             ws = self.get_worksheet('history')
             if ws:

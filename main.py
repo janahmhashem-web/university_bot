@@ -8,7 +8,7 @@ import threading
 import time
 import random
 import base64
-from flask import Flask, request, jsonify, render_template_string, Response
+from flask import Flask, request, jsonify, render_template_string, Response, abort
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -90,6 +90,7 @@ def save_user_chat(transaction_id, chat_id):
         logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
 # ------------------ دوال البوت الأساسية ------------------
+# (تبقى كما هي من الكود السابق – أضفتها كاملة في المرفق النهائي)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -395,6 +396,7 @@ def check_new_transactions():
                     email = new_row.get('البريد الإلكتروني', '')
                     qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
                     qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
+                    edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"  # رابط التعديل للموظف
 
                     qr_ws.append_row([
                         name,
@@ -402,12 +404,14 @@ def check_new_transactions():
                         transaction_id,
                         view_link,
                         qr_image_url,
-                        qr_page_link
+                        qr_page_link,
+                        edit_link
                     ])
                     new_row_num = len(qr_ws.get_all_values())
                     qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
                     qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
                     qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
+                    qr_ws.update_cell(new_row_num, 7, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')  # رابط التعديل
                     logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
                 # تسجيل في TransactionHistory
@@ -446,7 +450,6 @@ if sheets_client:
 # ------------------ نقاط نهاية API ------------------
 @app.route('/api/headers')
 def api_headers():
-    """إرجاع قائمة عناوين الأعمدة من ورقة manager"""
     if not sheets_client:
         return jsonify([])
     ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
@@ -693,7 +696,7 @@ def view_transaction_page(id):
                     <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         """
-        excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط']
+        excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط', 'عدد التعديلات', 'البريد الإلكتروني الموظف']
         for key, value in data.items():
             if key not in excluded:
                 display_value = value if value else '-'
@@ -737,63 +740,7 @@ def view_transaction_page(id):
         logger.error(f"🔥 خطأ في عرض المعاملة {id}: {e}", exc_info=True)
         return f"حدث خطأ أثناء تحميل الصفحة: {str(e)}", 500
 
-# ------------------ صفحات المدير ------------------
-INDEX_HTML = """<!DOCTYPE html>
-<html dir="rtl" lang="ar">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>المعاملات - لوحة التحكم</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 p-4">
-    <div class="max-w-6xl mx-auto">
-        <h1 class="text-2xl font-bold mb-4">📋 جميع المعاملات (المدير)</h1>
-        <div class="mb-4">
-            <input type="text" id="searchInput" placeholder="🔍 ابحث بـ ID أو الاسم أو الحالة..." 
-                   class="w-full p-3 border border-gray-300 rounded-xl text-right">
-        </div>
-        <div class="bg-white rounded-xl shadow overflow-x-auto">
-            <table class="min-w-full">
-                <thead class="bg-gray-50">
-                    发展
-                        <th class="px-4 py-2 text-right">ID</th>
-                        <th class="px-4 py-2 text-right">الاسم</th>
-                        <th class="px-4 py-2 text-right">الحالة</th>
-                        <th class="px-4 py-2 text-right">الموظف</th>
-                        <th class="px-4 py-2 text-right"></th>
-                    </tr>
-                </thead>
-                <tbody id="transactions"></tbody>
-            </table>
-        </div>
-    </div>
-    <script>
-        fetch('/api/transactions').then(r=>r.json()).then(data => {
-            const tbody = document.getElementById('transactions');
-            data.forEach(t => {
-                const row = `<tr class="border-t">
-                    <td class="px-4 py-2">${t.id}</td>
-                    <td class="px-4 py-2">${t.name}</td>
-                    <td class="px-4 py-2">${t.status}</td>
-                    <td class="px-4 py-2">${t.employee}</td>
-                    <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
-                tbody.innerHTML += row;
-            });
-        });
-        document.getElementById('searchInput').addEventListener('keyup', function() {
-            let filter = this.value.toLowerCase();
-            let rows = document.querySelectorAll('#transactions tr');
-            rows.forEach(row => {
-                let text = row.innerText.toLowerCase();
-                row.style.display = text.includes(filter) ? '' : 'none';
-            });
-        });
-    </script>
-</body>
-</html>"""
-
+# ------------------ صفحة تعديل المعاملة (للموظف) ------------------
 EDIT_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -812,13 +759,17 @@ EDIT_HTML = """
         .label-ios { font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }
         .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }
         .timeline-dot { width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }
+        /* تلوين الحالات */
+        .status-new { background-color: #e2e3e5; color: #383d41; }
+        .status-processing { background-color: #fff3cd; color: #856404; }
+        .status-completed { background-color: #d4edda; color: #155724; }
+        .status-delayed { background-color: #f8d7da; color: #721c24; }
     </style>
 </head>
 <body class="bg-gray-100 p-4">
     <div class="max-w-3xl mx-auto">
-        <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
+        <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm">
             <h1 class="text-xl font-semibold">🔍 تتبع المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
-            <a href="/" class="text-blue-500 text-sm">← العودة</a>
         </div>
 
         <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
@@ -864,7 +815,7 @@ EDIT_HTML = """
                 'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'البريد الإلكتروني',
                 'القسم', 'نوع المعاملة', 'المرافقات', 'ID'
             ];
-            const excludedKeys = ['LOG_JSON', 'الرابط'];
+            const excludedKeys = ['LOG_JSON', 'الرابط', 'عدد التعديلات', 'البريد الإلكتروني الموظف'];
 
             // عرض الحقول للقراءة فقط
             const rc = document.getElementById('readonly-fields');
@@ -900,8 +851,9 @@ EDIT_HTML = """
                     inputType = 'date';
                 } else if (key === 'الحالة') {
                     inputType = 'select';
+                    const statusClass = data[key] === 'جديد' ? 'status-new' : (data[key] === 'قيد المعالجة' ? 'status-processing' : (data[key] === 'مكتملة' ? 'status-completed' : (data[key] === 'متأخرة' ? 'status-delayed' : '')));
                     options = `
-                        <select name="${key}" class="ios-select">
+                        <select name="${key}" class="ios-select ${statusClass}" onchange="updateStatusColor(this)">
                             <option value="جديد" ${data[key] === 'جديد' ? 'selected' : ''}>جديد</option>
                             <option value="قيد المعالجة" ${data[key] === 'قيد المعالجة' ? 'selected' : ''}>قيد المعالجة</option>
                             <option value="مكتملة" ${data[key] === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
@@ -954,6 +906,14 @@ EDIT_HTML = """
             document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة أو حدث خطأ في تحميل البيانات</div>';
         });
 
+        function updateStatusColor(select) {
+            select.className = 'ios-select ' + 
+                (select.value === 'جديد' ? 'status-new' : 
+                 (select.value === 'قيد المعالجة' ? 'status-processing' : 
+                  (select.value === 'مكتملة' ? 'status-completed' : 
+                   (select.value === 'متأخرة' ? 'status-delayed' : ''))));
+        }
+
         document.getElementById('editForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
@@ -999,13 +959,74 @@ EDIT_HTML = """
 </html>
 """
 
-@app.route('/')
-def index():
-    return render_template_string(INDEX_HTML)
-
 @app.route('/transaction/<id>')
 def edit_transaction_page(id):
     return render_template_string(EDIT_HTML)
+
+# ------------------ صفحة المدير (محمية) ------------------
+INDEX_HTML = """<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>المعاملات - لوحة التحكم</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4">
+    <div class="max-w-6xl mx-auto">
+        <h1 class="text-2xl font-bold mb-4">📋 جميع المعاملات (المدير)</h1>
+        <div class="mb-4">
+            <input type="text" id="searchInput" placeholder="🔍 ابحث بـ ID أو الاسم أو الحالة..." 
+                   class="w-full p-3 border border-gray-300 rounded-xl text-right">
+        </div>
+        <div class="bg-white rounded-xl shadow overflow-x-auto">
+            <table class="min-w-full">
+                <thead class="bg-gray-50">
+                    发展
+                        <th class="px-4 py-2 text-right">ID</th>
+                        <th class="px-4 py-2 text-right">الاسم</th>
+                        <th class="px-4 py-2 text-right">الحالة</th>
+                        <th class="px-4 py-2 text-right">الموظف</th>
+                        <th class="px-4 py-2 text-right"></th>
+                    </tr>
+                </thead>
+                <tbody id="transactions"></tbody>
+             </table>
+        </div>
+    </div>
+    <script>
+        fetch('/api/transactions').then(r=>r.json()).then(data => {
+            const tbody = document.getElementById('transactions');
+            data.forEach(t => {
+                const row = `<tr class="border-t">
+                    <td class="px-4 py-2">${t.id}</td>
+                    <td class="px-4 py-2">${t.name}</td>
+                    <td class="px-4 py-2">${t.status}</td>
+                    <td class="px-4 py-2">${t.employee}</td>
+                    <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
+                 </tr>`;
+                tbody.innerHTML += row;
+            });
+        });
+        document.getElementById('searchInput').addEventListener('keyup', function() {
+            let filter = this.value.toLowerCase();
+            let rows = document.querySelectorAll('#transactions tr');
+            rows.forEach(row => {
+                let text = row.innerText.toLowerCase();
+                row.style.display = text.includes(filter) ? '' : 'none';
+            });
+        });
+    </script>
+</body>
+</html>"""
+
+@app.route('/')
+def index():
+    # حماية صفحة المدير بكلمة مرور من خلال query parameter
+    token = request.args.get('token')
+    if not token or token != Config.ADMIN_SECRET:
+        abort(403)
+    return render_template_string(INDEX_HTML)
 
 # ------------------ صفحات QR ------------------
 @app.route('/qr/<id>')
