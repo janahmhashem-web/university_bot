@@ -62,13 +62,10 @@ async def notify_user(transaction_id, message):
             if str(row.get('transaction_id')) == str(transaction_id):
                 chat_id = row.get('chat_id')
                 if chat_id:
-                    asyncio.run_coroutine_threadsafe(
-                        bot_app.bot.send_message(
-                            chat_id=int(chat_id),
-                            text=message,
-                            parse_mode='Markdown'
-                        ),
-                        background_loop
+                    await bot_app.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=message,
+                        parse_mode='Markdown'
                     )
                 break
     except Exception as e:
@@ -416,10 +413,12 @@ def check_new_transactions():
                 # تسجيل في TransactionHistory
                 sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام")
 
-                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً
-                # يمكن قراءة user_id من العمود المناسب إذا كان موجوداً، أو تجاهل
-                # سنقوم بإرسال إشعار للمستخدم المسجل فقط إذا كان لديه chat_id
-                await notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})")
+                # إرسال إشعار للمستخدم إذا كان معرفه موجوداً (باستخدام asyncio.run_coroutine_threadsafe)
+                if background_loop and bot_app:
+                    asyncio.run_coroutine_threadsafe(
+                        notify_user(transaction_id, f"🎉 *تم إنشاء معاملة جديدة*\n🆔 `{transaction_id}`\n🔗 [رابط المتابعة]({view_link})"),
+                        background_loop
+                    )
 
             last_row_count = current_count
     except Exception as e:
@@ -503,7 +502,7 @@ def api_transaction(id):
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # تحليل التأخير وإرسال إشعار
+        # تحليل التأخير وإرسال إشعار (باستخدام asyncio.run_coroutine_threadsafe)
         new_delay = updates.get('التأخير', old_data.get('التأخير'))
         new_status = updates.get('الحالة', old_data.get('الحالة'))
         user_message = f"✏️ *تم تحديث معاملتك {id}*\n"
@@ -513,7 +512,11 @@ def api_transaction(id):
         if new_status == 'مكتملة':
             user_message += "✅ *المعاملة مكتملة!* شكراً لاستخدامك خدماتنا.\n"
 
-        await notify_user(id, user_message)
+        if background_loop and bot_app:
+            asyncio.run_coroutine_threadsafe(
+                notify_user(id, user_message),
+                background_loop
+            )
 
         return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
@@ -541,7 +544,6 @@ def verify_page():
     phone = request.args.get('phone', '').strip()
 
     if name and phone:
-        # البحث عن المعاملة
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if ws:
             records = ws.get_all_records()
@@ -614,92 +616,102 @@ def verify_page():
 # ------------------ صفحة عرض المعاملة (للقراءة فقط) ------------------
 @app.route('/view/<id>')
 def view_transaction_page(id):
-    # نجلب البيانات من API
     try:
-        response = requests.get(f"{Config.WEB_APP_URL}/api/transaction/{id}")
-        if response.status_code != 200:
-            return "المعاملة غير موجودة", 404
-        data = response.json()
-    except:
-        return "خطأ في الاتصال", 500
+        if not sheets_client:
+            logger.error("❌ sheets_client غير متصل")
+            return "⚠️ النظام غير متصل بقاعدة البيانات", 500
 
-    # نجلب سجل التتبع
-    try:
-        history_response = requests.get(f"{Config.WEB_APP_URL}/api/history/{id}")
-        history = history_response.json() if history_response.status_code == 200 else []
-    except:
+        # جلب بيانات المعاملة مباشرة
+        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
+        if not row_info:
+            logger.warning(f"❌ المعاملة {id} غير موجودة")
+            return f"❌ المعاملة {id} غير موجودة", 404
+
+        data = row_info['data']
+        logger.info(f"✅ تم جلب بيانات المعاملة {id}")
+
+        # جلب سجل التتبع
+        history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         history = []
+        if history_ws:
+            records = history_ws.get_all_records()
+            history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
+                       for r in records if str(r.get('ID')) == id]
+            history.sort(key=lambda x: x['time'], reverse=True)
+            logger.info(f"✅ تم جلب {len(history)} سجل تتبع للمعاملة {id}")
 
-    # إنشاء HTML لعرض البيانات
-    html = f"""
-    <!DOCTYPE html>
-    <html dir="rtl" lang="ar">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>تفاصيل المعاملة {id}</title>
-        <script src="https://cdn.tailwindcss.com"></script>
-        <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-            * {{ font-family: 'Inter', sans-serif; }}
-            .ios-card {{ background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }}
-            .label-ios {{ font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }}
-            .timeline-item {{ border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }}
-            .timeline-dot {{ width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }}
-        </style>
-    </head>
-    <body class="bg-gray-100 p-4">
-        <div class="max-w-3xl mx-auto">
-            <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
-                <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span class="text-blue-600">{id}</span></h1>
-                <span class="text-gray-500 text-sm">(للمتابعة فقط)</span>
-            </div>
+        # بناء HTML
+        html = f"""
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>تفاصيل المعاملة {id}</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+            <style>
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+                * {{ font-family: 'Inter', sans-serif; }}
+                .ios-card {{ background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }}
+                .label-ios {{ font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }}
+                .timeline-item {{ border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }}
+                .timeline-dot {{ width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }}
+            </style>
+        </head>
+        <body class="bg-gray-100 p-4">
+            <div class="max-w-3xl mx-auto">
+                <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
+                    <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span class="text-blue-600">{id}</span></h1>
+                    <span class="text-gray-500 text-sm">(للمتابعة فقط)</span>
+                </div>
 
-            <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-                <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-    """
-    # عرض الحقول (ما عدا الحساسة)
-    excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط']
-    for key, value in data.items():
-        if key not in excluded:
-            display_value = value if value else '-'
-            if key == 'المرافقات' and value and value.startswith('http'):
-                display_value = f'<a href="{value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>'
-            html += f"""
-                <div class="bg-gray-50 p-3 rounded-xl">
-                    <span class="label-ios">{key}</span>
-                    <div class="text-gray-900 mt-1">{display_value}</div>
+                <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+                    <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        """
+        excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط']
+        for key, value in data.items():
+            if key not in excluded:
+                display_value = value if value else '-'
+                if key == 'المرافقات' and value and value.startswith('http'):
+                    display_value = f'<a href="{value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>'
+                html += f"""
+                        <div class="bg-gray-50 p-3 rounded-xl">
+                            <span class="label-ios">{key}</span>
+                            <div class="text-gray-900 mt-1">{display_value}</div>
+                        </div>
+                """
+        html += """
+                    </div>
                 </div>
-            """
-    html += """
-                </div>
-            </div>
 
-            <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-                <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
-                <div id="history-timeline" class="space-y-2">
-    """
-    if history:
-        for entry in history:
-            html += f"""
-                <div class="timeline-item">
-                    <span class="timeline-dot"></span>
-                    <span class="text-sm text-gray-500">{entry['time']}</span>
-                    <p class="text-gray-800">{entry['action']}</p>
-                    <p class="text-xs text-gray-400">{entry['user']}</p>
-                </div>
-            """
-    else:
-        html += '<p class="text-gray-500">لا يوجد سجل</p>'
-    html += """
+                <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
+                    <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
+                    <div id="history-timeline" class="space-y-2">
+        """
+        if history:
+            for entry in history:
+                html += f"""
+                        <div class="timeline-item">
+                            <span class="timeline-dot"></span>
+                            <span class="text-sm text-gray-500">{entry['time']}</span>
+                            <p class="text-gray-800">{entry['action']}</p>
+                            <p class="text-xs text-gray-400">{entry['user']}</p>
+                        </div>
+                """
+        else:
+            html += '<p class="text-gray-500">لا يوجد سجل</p>'
+        html += """
+                    </div>
                 </div>
             </div>
-        </div>
-    </body>
-    </html>
-    """
-    return html
+        </body>
+        </html>
+        """
+        return html
+    except Exception as e:
+        logger.error(f"🔥 خطأ في عرض المعاملة {id}: {e}", exc_info=True)
+        return f"حدث خطأ أثناء تحميل الصفحة: {str(e)}", 500
 
 # ------------------ صفحات المدير ------------------
 INDEX_HTML = """<!DOCTYPE html>
@@ -988,101 +1000,13 @@ def qr_page(id):
     """
     return html
 
-@app.route('/view/<id>')
-def view_transaction_page(id):
-    try:
-        if not sheets_client:
-            logger.error("❌ sheets_client غير متصل")
-            return "⚠️ النظام غير متصل بقاعدة البيانات", 500
+@app.route('/qr_image/<id>')
+def qr_image(id):
+    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    qr_base64 = QRGenerator.generate_qr(view_link)
+    img_data = base64.b64decode(qr_base64)
+    return Response(img_data, mimetype='image/png')
 
-        # جلب بيانات المعاملة مباشرة
-        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
-        if not row_info:
-            logger.warning(f"❌ المعاملة {id} غير موجودة")
-            return f"❌ المعاملة {id} غير موجودة", 404
-
-        data = row_info['data']
-        logger.info(f"✅ تم جلب بيانات المعاملة {id}")
-
-        # جلب سجل التتبع
-        history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-        history = []
-        if history_ws:
-            records = history_ws.get_all_records()
-            history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
-                       for r in records if str(r.get('ID')) == id]
-            history.sort(key=lambda x: x['time'], reverse=True)
-            logger.info(f"✅ تم جلب {len(history)} سجل تتبع للمعاملة {id}")
-
-        # بناء HTML (نفس الكود السابق)
-        html = f"""
-        <!DOCTYPE html>
-        <html dir="rtl" lang="ar">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>تفاصيل المعاملة {id}</title>
-            <script src="https://cdn.tailwindcss.com"></script>
-            <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-                * {{ font-family: 'Inter', sans-serif; }}
-                .ios-card {{ background: rgba(255,255,255,0.8); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 16px; }}
-                .label-ios {{ font-size: 14px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }}
-                .timeline-item {{ border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 20px; }}
-                .timeline-dot {{ width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }}
-            </style>
-        </head>
-        <body class="bg-gray-100 p-4">
-            <div class="max-w-3xl mx-auto">
-                <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm flex justify-between items-center">
-                    <h1 class="text-xl font-semibold">🔍 تفاصيل المعاملة <span class="text-blue-600">{id}</span></h1>
-                    <span class="text-gray-500 text-sm">(للمتابعة فقط)</span>
-                </div>
-
-                <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-                    <h2 class="text-lg font-semibold mb-3">📋 معلومات المعاملة</h2>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        """
-        excluded = ['ID', 'LOG_JSON', 'آخر تعديل بتاريخ', 'آخر تعديل بواسطة', 'الرابط']
-        for key, value in data.items():
-            if key not in excluded:
-                display_value = value if value else '-'
-                if key == 'المرافقات' and value and value.startswith('http'):
-                    display_value = f'<a href="{value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>'
-                html += f"""
-                        <div class="bg-gray-50 p-3 rounded-xl">
-                            <span class="label-ios">{key}</span>
-                            <div class="text-gray-900 mt-1">{display_value}</div>
-                        </div>
-                """
-        html += """
-                    </div>
-                </div>
-
-                <div class="ios-card rounded-2xl p-5 mb-4 shadow-sm">
-                    <h2 class="text-lg font-semibold mb-3">📜 سجل الحركات</h2>
-                    <div id="history-timeline" class="space-y-2">
-        """
-        if history:
-            for entry in history:
-                html += f"""
-                        <div class="timeline-item">
-                            <span class="timeline-dot"></span>
-                            <span class="text-sm text-gray-500">{entry['time']}</span>
-                            <p class="text-gray-800">{entry['action']}</p>
-                            <p class="text-xs text-gray-400">{entry['user']}</p>
-                        </div>
-                """
-        else:
-            html += '<p class="text-gray-500">لا يوجد سجل</p>'
-        html += """
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        return html
-    except Exception as e:
-        logger.error(f"🔥 خطأ في عرض المعاملة {id}: {e}", exc_info=True)
-        return f"حدث خطأ أثناء تحميل الصفحة: {str(e)}", 500
+if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)

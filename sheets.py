@@ -3,6 +3,7 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ class GoogleSheetsClient:
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
             # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي للجدول
-            self.spreadsheet = self.client.open("university system")
+            self.spreadsheet = self.client.open("اسم_جدولك")
             logger.info("✅ تم الاتصال بـ Google Sheets")
             # إنشاء الأوراق المطلوبة وتعبئة الأعمدة الأساسية
             self._init_sheets()
@@ -29,7 +30,6 @@ class GoogleSheetsClient:
         """إنشاء الأوراق المطلوبة إذا لم تكن موجودة، وإضافة الأعمدة الأساسية"""
         from config import Config
 
-        # الأوراق المطلوبة
         sheets_required = {
             Config.SHEET_MANAGER: [
                 "Timestamp", "اسم صاحب المعاملة الثلاثي", "رقم الهاتف", "البريد الإلكتروني",
@@ -50,12 +50,11 @@ class GoogleSheetsClient:
                 if ws is None:
                     # إنشاء الورقة
                     ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(required_headers))
-                    # كتابة العناوين
                     for col, header in enumerate(required_headers, 1):
                         ws.update_cell(1, col, header)
                     logger.info(f"✅ تم إنشاء الورقة '{sheet_name}' مع الأعمدة المطلوبة")
                 else:
-                    # التأكد من وجود الأعمدة المطلوبة (إضافة أي أعمدة مفقودة)
+                    # التأكد من وجود الأعمدة (إضافة المفقودة)
                     existing_headers = ws.row_values(1)
                     for col, header in enumerate(required_headers, 1):
                         if header not in existing_headers:

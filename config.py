@@ -8,11 +8,12 @@ class Config:
 
     # Web App URL
     WEB_APP_URL = os.getenv("WEB_APP_URL", "https://universitybot-production.up.railway.app")
+    # تأكد من إضافة https://
+    if not WEB_APP_URL.startswith("https://"):
+        WEB_APP_URL = "https://" + WEB_APP_URL.lstrip("http://")
 
     # Google Sheets
     GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
-
-    # Sheet names
     SHEET_MANAGER = os.getenv("SHEET_MANAGER", "manager")
     SHEET_HISTORY = os.getenv("SHEET_HISTORY", "history")
     SHEET_QR = os.getenv("SHEET_QR", "qr")
