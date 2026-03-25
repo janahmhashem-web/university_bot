@@ -899,10 +899,10 @@ def register_transaction():
                             resultDiv.innerHTML = `
                                 <div style="text-align:center;">
                                     ✅ تم تسجيل المعاملة بنجاح<br>
-                                    🆔 رقم المعاملة: <strong style="font-size:1.2em;">${json.id}</strong><br><br>
+                                    🆔  رقم المعاملة مهم لا تشاركه ابداً : <strong style="font-size:1.2em;">${json.id}</strong><br><br>
                                     <a href="${json.view_link}" target="_blank" style="background:#8b5cf6; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">🔗 عرض التفاصيل</a>
                                     <a href="${json.deep_link}" target="_blank" style="background:#2c3e50; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">📱 فتح البوت</a>
-                                    <p style="margin-top:15px; font-size:13px;">احتفظ برقم المعاملة لمتابعة معاملتك.</p>
+                                    <p style="margin-top:15px; font-size:13px;"> استعمل رقم معاملتك (ID)للحصول على معلومات حول معاملتك .</p>
                                 </div>
                             `;
                             resultDiv.classList.add('success');
@@ -1019,7 +1019,7 @@ def verify_page():
                 <div class="content">
                     <p>رقم المعاملة الخاص بك:</p>
                     <div class="id">{transaction_id}</div>
-                    <p>احتفظ بهذا الرقم لمتابعة المعاملة.</p>
+                    <p> احتفظ بهذا الرقم لمتابعة المعاملة </p>
                     <a href="{Config.WEB_APP_URL}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
                     <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت</a>
                 </div>
