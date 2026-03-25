@@ -11,8 +11,8 @@ class AIAssistant:
         if not api_key:
             raise ValueError("GROQ_API_KEY not set")
         self.client = Groq(api_key=api_key)
-        # استخدام نموذج حديث ومستقر (تم تحديثه من النموذج القديم)
-        self.model = "mixtral-8x7b-32768"   # أو "llama-3.1-8b-instant"
+        # استخدام نموذج مدعوم حالياً (تم تحديثه)
+        self.model = "llama-3.1-8b-instant"   # أو "llama-3.3-70b-versatile" أو "gemma2-9b-it"
         self.sheets_client = sheets_client
 
     async def get_response(self, user_message, user_id, user_name):
