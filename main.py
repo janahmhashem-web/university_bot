@@ -49,7 +49,70 @@ except Exception as e:
     logger.error(f"❌ فشل تهيئة Groq AI: {e}")
     ai_assistant = None
 
-# ------------------ دوال مساعدة ------------------
+# ------------------ دوال مساعدة للبوت ------------------
+def get_all_transactions_list():
+    """إرجاع قائمة منسقة بجميع المعاملات"""
+    if not sheets_client:
+        return "⚠️ النظام غير متصل بقاعدة البيانات."
+    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    if not records:
+        return "لا توجد معاملات حتى الآن."
+    result = "📋 *قائمة جميع المعاملات:*\n"
+    for r in records:
+        result += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')} - {r.get('الحالة', '')}\n"
+    return result
+
+def get_transactions_by_status(status):
+    """إرجاع المعاملات حسب حالة محددة"""
+    if not sheets_client:
+        return "⚠️ النظام غير متصل بقاعدة البيانات."
+    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    filtered = [r for r in records if r.get('الحالة') == status]
+    if not filtered:
+        return f"لا توجد معاملات بالحالة '{status}'."
+    result = f"📋 *المعاملات بحالة {status}:*\n"
+    for r in filtered:
+        result += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')}\n"
+    return result
+
+def get_transactions_with_errors():
+    """إرجاع المعاملات التي تحتوي على أخطاء (الحالة 'خطأ' أو ملاحظات تحتوي 'خطأ')"""
+    if not sheets_client:
+        return "⚠️ النظام غير متصل بقاعدة البيانات."
+    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    errors = []
+    for r in records:
+        if r.get('الحالة') == 'خطأ':
+            errors.append(r)
+        else:
+            # البحث عن كلمة 'خطأ' في أي حقل نصي
+            for key, value in r.items():
+                if isinstance(value, str) and 'خطأ' in value:
+                    errors.append(r)
+                    break
+    if not errors:
+        return "لا توجد معاملات بها أخطاء."
+    result = "⚠️ *المعاملات التي بها أخطاء:*\n"
+    for r in errors:
+        result += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')} - {r.get('الحالة', '')}\n"
+    return result
+
+def get_transaction_detail(transaction_id):
+    """إرجاع تفاصيل معاملة محددة"""
+    if not sheets_client:
+        return "⚠️ النظام غير متصل بقاعدة البيانات."
+    row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+    if not row_info:
+        return f"❌ لا توجد معاملة بالرقم {transaction_id}"
+    data = row_info['data']
+    msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
+    for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
+        if key in data and data[key]:
+            msg += f"• {key}: {data[key]}\n"
+    msg += f"\n🔗 [رابط المتابعة]({Config.WEB_APP_URL}/view/{transaction_id})"
+    return msg
+
+# ------------------ دوال مساعدة عامة ------------------
 async def notify_user(transaction_id, message):
     """إرسال إشعار للمستخدم المرتبط بالمعاملة عبر البوت"""
     if not sheets_client or not bot_app or not background_loop:
@@ -92,12 +155,11 @@ def save_user_chat(transaction_id, chat_id):
 
 # ------------------ معالجة المعاملات الجديدة (مع ThreadPoolExecutor) ------------------
 last_row_count = 0
-executor = ThreadPoolExecutor(max_workers=10)  # للتعامل مع عدة معاملات دفعة واحدة
+executor = ThreadPoolExecutor(max_workers=10)
 
 def process_new_transaction(ws, row_number, new_row, transaction_id):
     """معالجة معاملة واحدة في خيط منفصل"""
     try:
-        # توليد ID إذا لزم
         if not transaction_id:
             now = datetime.now()
             date_str = now.strftime("%Y%m%d%H%M%S")
@@ -108,10 +170,9 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
                 id_col = headers.index('ID') + 1
                 ws.update_cell(row_number, id_col, transaction_id)
             except ValueError:
-                ws.update_cell(row_number, 8, transaction_id)  # fallback to column 8
+                ws.update_cell(row_number, 8, transaction_id)
             logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
 
-        # رابط العرض
         view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
         hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
         try:
@@ -119,9 +180,8 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
             link_col = headers.index('الرابط') + 1
             ws.update_cell(row_number, link_col, hyperlink_formula)
         except ValueError:
-            ws.update_cell(row_number, 21, hyperlink_formula)  # fallback to column 21
+            ws.update_cell(row_number, 21, hyperlink_formula)
 
-        # إدراج في شيت QR
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
@@ -139,13 +199,11 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
                 qr_ws.update_cell(new_row_num, image_col_qr, f'=IMAGE("{qr_image_url}")')
                 qr_ws.update_cell(new_row_num, qr_page_col, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
             except (ValueError, IndexError):
-                # fallback to column positions
                 qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
                 qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
                 qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
             logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
 
-        # إرسال الإيميل
         customer_email = new_row.get('البريد الإلكتروني')
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
         if transaction_id and customer_email:
@@ -159,7 +217,6 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
             else:
                 logger.error(f"❌ فشل إرسال الإيميل للمعاملة {transaction_id}")
 
-        # تسجيل التاريخ
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         if history_ws:
             history_ws.append_row([
@@ -172,7 +229,6 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         logger.error(f"❌ خطأ في معالجة المعاملة {transaction_id}: {e}", exc_info=True)
 
 def check_new_transactions():
-    """مراقبة الصفوف الجديدة في Google Sheets"""
     global last_row_count
     try:
         if not sheets_client:
@@ -469,6 +525,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
     msg += "يمكنك استخدام الأزرار أدناه للوصول إلى الخدمات بسهولة:\n"
+    if is_admin:
+        msg += "\n👑 *أنت مدير*\nيمكنك طلب أي شيء مثل: قائمة المعاملات، إحصائيات، تحليل معاملة، إلخ."
+    else:
+        msg += "\n📌 *ملاحظة:* للحصول على معلومات التتبع، يجب إدخال رقم المعاملة (ID) باستخدام الأمر `/id` أو عبر الأزرار."
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -705,12 +765,72 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await ai_chat_handler(update, context)
 
 async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    user_id = update.effective_user.id
+    is_admin = (user_id == Config.ADMIN_CHAT_ID)
+    user_name = update.effective_user.first_name or ""
+
+    # إذا كان المستخدم مديراً، نتعامل مع الطلبات الخاصة أولاً
+    if is_admin:
+        msg_lower = user_message.lower()
+        # طلب قائمة جميع المعاملات
+        if any(word in msg_lower for word in ['جميع المعاملات', 'قائمة المعاملات', 'كل المعاملات', 'عرض الكل']):
+            response = get_all_transactions_list()
+            await update.message.reply_text(response, parse_mode='Markdown')
+            return
+        # طلب إحصائيات
+        if any(word in msg_lower for word in ['إحصاء', 'إحصائيات', 'stats', 'احصائيات']):
+            await stats(update, context)
+            return
+        # طلب معاملات مكتملة
+        if 'مكتملة' in msg_lower:
+            response = get_transactions_by_status('مكتملة')
+            await update.message.reply_text(response, parse_mode='Markdown')
+            return
+        # طلب معاملات قيد المعالجة
+        if 'قيد المعالجة' in msg_lower:
+            response = get_transactions_by_status('قيد المعالجة')
+            await update.message.reply_text(response, parse_mode='Markdown')
+            return
+        # طلب معاملات جديدة
+        if 'جديد' in msg_lower:
+            response = get_transactions_by_status('جديد')
+            await update.message.reply_text(response, parse_mode='Markdown')
+            return
+        # طلب معاملات متأخرة
+        if 'متأخرة' in msg_lower:
+            response = get_transactions_by_status('متأخرة')
+            await update.message.reply_text(response, parse_mode='Markdown')
+            return
+        # طلب معاملات بها خطأ
+        if 'خطأ' in msg_lower or 'أخطاء' in msg_lower:
+            response = get_transactions_with_errors()
+            await update.message.reply_text(response, parse_mode='Markdown')
+            return
+        # طلب تحليل معاملة محدد
+        if 'تحليل' in msg_lower:
+            # نبحث عن رقم معاملة في النص
+            import re
+            match = re.search(r'MUT-\d{14}-\d{4}', user_message)
+            if match:
+                transaction_id = match.group()
+                context.args = [transaction_id]
+                await analyze(update, context)
+                return
+            else:
+                await update.message.reply_text("الرجاء إدخال رقم المعاملة بشكل صحيح: /analyze MUT-123456...")
+                return
+        # إذا لم يتطابق مع أي من الأوامر المحددة، نمرره للذكاء الاصطناعي العام
+        logger.info(f"🤖 استعلام ذكي من المدير {user_name}: {user_message[:50]}...")
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        response = await ai_assistant.get_response(user_message, user_id, user_name)
+        await update.message.reply_text(response)
+        return
+
+    # المستخدم عادي
     if not ai_assistant:
         await update.message.reply_text("عذراً، خدمة الذكاء الاصطناعي غير متاحة حالياً.")
         return
-    user_message = update.message.text
-    user_id = update.effective_user.id
-    user_name = update.effective_user.first_name or ""
     logger.info(f"🤖 استعلام ذكي من {user_name}: {user_message[:50]}...")
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     response = await ai_assistant.get_response(user_message, user_id, user_name)
