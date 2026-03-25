@@ -150,7 +150,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     f"✅ تم ربط حسابك بالمعاملة\n\n"
                     f"🆔 {transaction_id}\n"
-                    f"يمكنك متابعة معاملتك من هنا."
+                    f" استعمل رقم معاملتك (🆔)للحصول على معلومات حول معاملتك "
                 )
             else:
                 await update.message.reply_text("❌ المعاملة غير موجودة")
@@ -169,7 +169,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("📊 إحصائيات", callback_data="cmd_stats")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    msg = "👋 *مرحباً بك في بوت متابعة المعاملات*\n\n"
+    msg = "👋 *اهلاً بك في بوت متابعة المعاملات*\n\n"
     msg += "يمكنك استخدام الأزرار أدناه للوصول إلى الخدمات بسهولة:\n"
     if is_admin:
         msg += "\n👑 *أنت مدير*\nيمكنك طلب أي شيء مثل: قائمة المعاملات، إحصائيات، تحليل معاملة، إلخ."
@@ -195,15 +195,52 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown'
         )
     elif data == "cmd_qr":
-        await query.edit_message_text(
+        user_id = update.effective_user.id
+        transaction_id = None
+
+        # البحث عن المعاملة المرتبطة بالمستخدم
+        if sheets_client:
+            try:
+                ws = sheets_client.get_worksheet(Config.SHEET_USERS)
+                if ws:
+                    records = ws.get_all_records()
+                    for row in records:
+                        if str(row.get('chat_id')) == str(user_id):
+                            transaction_id = row.get('transaction_id')
+                            break
+            except Exception as e:
+                logger.error(f"خطأ في جلب معاملة المستخدم: {e}")
+
+        instruction_text = (
             "📱 *كيفية استخدام رمز QR لتتبع المعاملة*\n\n"
             "1️⃣ قم بطباعة رمز QR الموجود في صفحة المعاملة.\n"
             "2️⃣ الصق الورقة مع المعاملة في مكان واضح.\n"
             "3️⃣ عند مسح الرمز، ستظهر صفحة التتبع.\n"
             "4️⃣ يمكن لأي شخص لديه الرابط متابعة المعاملة.\n\n"
-            "💡 *نصيحة:* احتفظ بالورقة في ملف المعاملة لتسهيل التتبع.",
-            parse_mode='Markdown'
+            "💡 *نصيحة:* احتفظ بالورقة في ملف المعاملة لتسهيل التتبع."
         )
+
+        if transaction_id:
+            qr_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
+            qr_base64 = QRGenerator.generate_qr(qr_link)
+            # إرسال صورة QR مع التعليمات
+            await context.bot.send_photo(
+                chat_id=update.effective_chat.id,
+                photo=base64.b64decode(qr_base64),
+                caption=instruction_text + f"\n\n🔗 *رابط QR الخاص بك:*\n`{qr_link}`",
+                parse_mode='Markdown'
+            )
+            # حذف الرسالة القديمة (الأزرار)
+            await query.message.delete()
+        else:
+            # إضافة تعليمات ربط الحساب
+            await query.edit_message_text(
+                instruction_text + "\n\n📌 *لم يتم ربط حسابك بأي معاملة بعد.*\n\n"
+                "لربط حسابك بمعاملة، استخدم الرابط التالي:\n"
+                f"`https://t.me/{Config.BOT_USERNAME}?start=رقم_المعاملة`\n\n"
+                "(استبدل `رقم_المعاملة` برقم المعاملة الخاص بك)",
+                parse_mode='Markdown'
+            )
     elif data == "cmd_support":
         await query.edit_message_text(
             "📨 لإرسال رسالة إلى فريق الدعم، استخدم الأمر `/support`.\n"
@@ -902,7 +939,7 @@ def register_transaction():
                                     🆔  رقم المعاملة مهم لا تشاركه ابداً : <strong style="font-size:1.2em;">${json.id}</strong><br><br>
                                     <a href="${json.view_link}" target="_blank" style="background:#8b5cf6; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">🔗 عرض التفاصيل</a>
                                     <a href="${json.deep_link}" target="_blank" style="background:#2c3e50; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">📱 فتح البوت</a>
-                                    <p style="margin-top:15px; font-size:13px;"> استعمل رقم معاملتك (ID)للحصول على معلومات حول معاملتك .</p>
+                                    <p style="margin-top:15px; font-size:13px;"> احتفظ برقم المعاملة لمتابعة معاملتك .</p>
                                 </div>
                             `;
                             resultDiv.classList.add('success');
