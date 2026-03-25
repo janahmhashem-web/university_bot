@@ -20,8 +20,8 @@ class GoogleSheetsClient:
             creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
-            # ⚠️ استبدل "اسم_جدولك" بالاسم الحقيقي للجدول
-            self.spreadsheet = self.client.open("university system")
+            # تأكد من أن اسم الجدول مطابق تماماً لما في Google Sheets
+            self.spreadsheet = self.client.open("university system")  # غيّر الاسم إذا كان مختلفاً
             logger.info("✅ تم الاتصال بـ Google Sheets")
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
@@ -90,6 +90,7 @@ class GoogleSheetsClient:
             ws = self.get_worksheet('history')
             if ws:
                 ws.append_row([datetime.now().isoformat(), transaction_id, action, user])
+                logger.info(f"📝 تم إضافة سجل تاريخ للمعاملة {transaction_id}")
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 

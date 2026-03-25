@@ -44,7 +44,7 @@ app = Flask(__name__)
 
 # ------------------ الذكاء الاصطناعي ------------------
 try:
-    ai_assistant = AIAssistant(sheets_client=sheets_client)  # تمرير sheets_client
+    ai_assistant = AIAssistant(sheets_client=sheets_client)
     logger.info("✅ تم تهيئة Groq AI")
 except Exception as e:
     logger.error(f"❌ فشل تهيئة Groq AI: {e}")
@@ -93,7 +93,6 @@ def save_user_chat(transaction_id, chat_id):
 
 # ------------------ دوال مساعدة للمدير ------------------
 def get_all_transactions_list():
-    """إرجاع قائمة منسقة بجميع المعاملات"""
     if not sheets_client:
         return "⚠️ النظام غير متصل بقاعدة البيانات."
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
@@ -105,7 +104,6 @@ def get_all_transactions_list():
     return result
 
 def get_transactions_by_status(status):
-    """إرجاع المعاملات حسب حالة محددة"""
     if not sheets_client:
         return "⚠️ النظام غير متصل بقاعدة البيانات."
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
@@ -118,7 +116,6 @@ def get_transactions_by_status(status):
     return result
 
 def get_transactions_with_errors():
-    """إرجاع المعاملات التي تحتوي على أخطاء (الحالة 'خطأ' أو ملاحظات تحتوي 'خطأ')"""
     if not sheets_client:
         return "⚠️ النظام غير متصل بقاعدة البيانات."
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
@@ -358,7 +355,6 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """تحليل معاملة باستخدام الذكاء الاصطناعي"""
     try:
         if not sheets_client:
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
@@ -372,7 +368,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
             return
         transaction_data = row_info['data']
-
         ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         history = []
         if ws:
@@ -380,7 +375,6 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
                        for r in records if str(r.get('ID')) == transaction_id]
             history.sort(key=lambda x: x['time'])
-
         await update.message.reply_text("🔍 جاري تحليل المعاملة...")
         analysis = await ai_assistant.analyze_transaction(transaction_data, history)
         await update.message.reply_text(analysis, parse_mode='Markdown')
@@ -585,6 +579,7 @@ def api_submit():
 
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
+            logger.error("❌ ورقة manager غير موجودة")
             return jsonify({'success': False, 'error': 'ورقة manager غير موجودة'}), 500
 
         now = datetime.now()
@@ -615,7 +610,7 @@ def api_submit():
             elif header == 'الرابط':
                 new_row[idx] = edit_link
         ws.append_row(new_row)
-        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager")
+        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager (الصف الجديد)")
 
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
