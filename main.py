@@ -198,19 +198,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         transaction_id = None
 
-        # البحث عن المعاملة المرتبطة بالمستخدم
-        if sheets_client:
-            try:
-                ws = sheets_client.get_worksheet(Config.SHEET_USERS)
-                if ws:
-                    records = ws.get_all_records()
-                    for row in records:
-                        if str(row.get('chat_id')) == str(user_id):
-                            transaction_id = row.get('transaction_id')
-                            break
-            except Exception as e:
-                logger.error(f"خطأ في جلب معاملة المستخدم: {e}")
-
         instruction_text = (
             "📱 *كيفية استخدام رمز QR لتتبع المعاملة*\n\n"
             "1️⃣ قم بطباعة رمز QR الموجود في صفحة المعاملة.\n"
