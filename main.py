@@ -198,11 +198,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         transaction_id = None
 
+
         instruction_text = (
             "📱 *كيفية استخدام رمز QR لتتبع المعاملة*\n\n"
             "1️⃣ قم بطباعة رمز QR الموجود في صفحة المعاملة.\n"
             "2️⃣ الصق الورقة مع المعاملة في مكان واضح.\n"
-            "3️⃣ ✅ سيتم تتبع المعاملة بنجاح \n"
+            "3️⃣  سيتم تتبع المعاملة بنجاح ✅\n"
             "💡 *نصيحة:* احتفظ بالورقة في ملف المعاملة لتسهيل التتبع."
         )
 
