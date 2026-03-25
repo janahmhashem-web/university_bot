@@ -11,31 +11,38 @@ class AIAssistant:
         if not api_key:
             raise ValueError("GROQ_API_KEY not set")
         self.client = Groq(api_key=api_key)
-        # استخدام نموذج مدعوم حالياً (تم تحديثه)
-        self.model = "llama-3.1-8b-instant"   # أو "llama-3.3-70b-versatile" أو "gemma2-9b-it"
+        self.model = "llama-3.1-8b-instant"   # أو أي نموذج مدعوم
         self.sheets_client = sheets_client
 
     async def get_response(self, user_message, user_id, user_name):
-        """رد ذكي على الرسائل العادية مع استخدام بيانات الشيت"""
+        """رد ذكي مع الاستفادة من سياق المستخدم والمعاملات"""
         try:
-            # محاولة استخراج رقم معاملة من الرسالة
+            # 1. محاولة استخراج رقم معاملة من الرسالة
             transaction_id = self._extract_transaction_id(user_message)
 
+            # 2. إذا لم نعثر على رقم في الرسالة، نبحث عن معاملة مرتبطة بالمستخدم
+            if not transaction_id and self.sheets_client:
+                transaction_id = self._get_user_transaction_id(user_id)
+
+            # 3. بناء السياق من بيانات المعاملة إن وجدت
             context = ""
             if transaction_id and self.sheets_client:
-                # جلب بيانات المعاملة من الشيت
                 row_info = self.sheets_client.get_row_by_id("manager", transaction_id)
                 if row_info:
                     data = row_info['data']
                     context = self._format_transaction_context(data)
+                    # إضافة رابط QR إذا طلب المستخدم QR
+                    if "qr" in user_message.lower() or "قريء" in user_message:
+                        qr_link = f"{os.getenv('WEB_APP_URL')}/qr/{transaction_id}"
+                        context += f"\n\nرابط QR الخاص بمعاملتك: {qr_link}"
                 else:
                     context = f"لم أجد معاملة بالرقم {transaction_id} في النظام."
 
-            # إذا لم نستخرج رقم معاملة، نبحث عن أسئلة عامة عن المعاملات
+            # 4. إذا لم يكن لدينا معاملة محددة، نقدم إحصائيات عامة
             if not context:
                 context = await self._get_general_stats_context()
 
-            # بناء الرسالة للنموذج
+            # 5. بناء الرسالة للنموذج
             system_prompt = (
                 "أنت مساعد ذكي ومفيد. لديك معرفة كاملة ببيانات المعاملات المخزنة في النظام. "
                 "إذا سألك المستخدم عن معاملة محددة، استخدم المعلومات المقدمة في السياق للإجابة بدقة. "
@@ -62,19 +69,33 @@ class AIAssistant:
             return "عذراً، حدث خطأ في المعالجة."
 
     def _extract_transaction_id(self, text):
-        """استخراج رقم المعاملة من النص (تنسيق MUT-... أو أرقام فقط)"""
-        # البحث عن نمط MUT-xxxx
+        """استخراج رقم المعاملة من النص"""
         match = re.search(r'MUT-\d{14}-\d{4}', text)
         if match:
             return match.group(0)
-        # البحث عن أرقام فقط (قد يكون ID رقمي)
         match = re.search(r'\b\d{10,}\b', text)
         if match:
             return match.group(0)
         return None
 
+    def _get_user_transaction_id(self, chat_id):
+        """استرجاع رقم المعاملة المرتبطة بالمستخدم من ورقة users"""
+        if not self.sheets_client:
+            return None
+        try:
+            ws = self.sheets_client.get_worksheet("users")
+            if not ws:
+                return None
+            records = ws.get_all_records()
+            for row in records:
+                if str(row.get('chat_id')) == str(chat_id):
+                    return row.get('transaction_id')
+        except Exception as e:
+            logger.error(f"خطأ في استرجاع معاملة المستخدم: {e}")
+        return None
+
     def _format_transaction_context(self, data):
-        """تنسيق بيانات المعاملة لاستخدامها كسياق للنموذج"""
+        """تنسيق بيانات المعاملة للسياق"""
         lines = []
         lines.append(f"المعاملة رقم {data.get('ID', 'غير معروف')}:")
         lines.append(f"الاسم: {data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}")
@@ -88,7 +109,7 @@ class AIAssistant:
         return "\n".join(lines)
 
     async def _get_general_stats_context(self):
-        """جلب إحصائيات عامة عن المعاملات لتقديمها كسياق"""
+        """إحصائيات عامة للمعاملات"""
         if not self.sheets_client:
             return ""
         try:
@@ -97,19 +118,18 @@ class AIAssistant:
             completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
             pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
             delayed = sum(1 for r in records if r.get('التأخير') == 'نعم')
-            context = (
+            return (
                 f"إجمالي المعاملات في النظام: {total}\n"
                 f"المعاملات المكتملة: {completed}\n"
                 f"المعاملات قيد المعالجة: {pending}\n"
                 f"المعاملات المتأخرة: {delayed}\n"
             )
-            return context
         except Exception as e:
             logger.error(f"خطأ في جلب الإحصائيات: {e}")
             return ""
 
     async def analyze_transaction(self, transaction_data, history):
-        """تحليل معاملة باستخدام الذكاء الاصطناعي (كما هو)"""
+        """تحليل معاملة (كما هو)"""
         try:
             summary = f"رقم المعاملة: {transaction_data.get('ID', 'غير معروف')}\n"
             summary += f"الاسم: {transaction_data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}\n"
