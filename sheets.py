@@ -30,6 +30,7 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
+    # باقي الدوال (كما هي) – يجب أن تكون كاملة
     def _init_sheets(self):
         from config import Config
 
