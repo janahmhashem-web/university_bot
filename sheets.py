@@ -17,20 +17,41 @@ class GoogleSheetsClient:
             scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
             creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
             if not creds_json:
-                raise ValueError("GOOGLE_CREDENTIALS_JSON not set")
-            creds_dict = json.loads(creds_json)
+                raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable is not set")
+
+            try:
+                creds_dict = json.loads(creds_json)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in GOOGLE_CREDENTIALS_JSON: {e}")
+
+            required_keys = ['private_key', 'client_email']
+            for key in required_keys:
+                if key not in creds_dict:
+                    raise ValueError(f"Missing '{key}' in credentials JSON")
+
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
+
             from config import Config
+            if not Config.SPREADSHEET_ID:
+                raise ValueError("SPREADSHEET_ID is not set in config")
+
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
             logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
+
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
+
+            # محاولة إزالة الفلتر من ورقة manager
+            try:
+                self.remove_filter(Config.SHEET_MANAGER)
+            except Exception as e:
+                logger.warning(f"تعذر إزالة الفلتر: {e}")
+
         except Exception as e:
-            logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
+            logger.error(f"❌ فشل الاتصال بـ Google Sheets: {str(e)}", exc_info=True)
             raise
 
-    # باقي الدوال (كما هي) – يجب أن تكون كاملة
     def _init_sheets(self):
         from config import Config
 
@@ -74,6 +95,29 @@ class GoogleSheetsClient:
                             logger.info(f"✅ تم إضافة العمود '{header}' إلى الورقة '{sheet_name}'")
             except Exception as e:
                 logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
+
+    def remove_filter(self, sheet_name):
+        """محاولة إزالة أي فلتر من الورقة باستخدام Sheets API."""
+        try:
+            sheet = self.get_worksheet(sheet_name)
+            if not sheet:
+                return
+            sheet_id = sheet._properties['sheetId']
+            from googleapiclient.discovery import build
+            sheets_service = build('sheets', 'v4', credentials=self.client.auth)
+            requests = [{
+                "clearBasicFilter": {
+                    "sheetId": sheet_id
+                }
+            }]
+            body = {"requests": requests}
+            sheets_service.spreadsheets().batchUpdate(
+                spreadsheetId=self.spreadsheet.id,
+                body=body
+            ).execute()
+            logger.info(f"✅ تم إزالة الفلتر من الورقة {sheet_name}")
+        except Exception as e:
+            logger.warning(f"⚠️ فشل إزالة الفلتر (ليس بالضرورة خطأ): {e}")
 
     def get_worksheet(self, sheet_name):
         try:
@@ -167,12 +211,10 @@ class GoogleSheetsClient:
             row_number = row_info['row']
             data = row_info['data']
 
-            # إضافة تاريخ الأرشفة
             now = datetime.now()
             archive_time = now.strftime("%Y-%m-%d %H:%M:%S")
             data['تاريخ_الأرشفة'] = archive_time
 
-            # إدراج في archive_manager
             ws_archive_manager = self.get_worksheet('archive_manager')
             if not ws_archive_manager:
                 logger.error("ورقة archive_manager غير موجودة")
@@ -181,7 +223,6 @@ class GoogleSheetsClient:
             new_row = [data.get(header, '') for header in headers]
             ws_archive_manager.append_row(new_row)
 
-            # جلب سجل التاريخ
             ws_history = self.get_worksheet('history')
             if ws_history:
                 records = ws_history.get_all_records()
@@ -193,7 +234,6 @@ class GoogleSheetsClient:
                         hist['تاريخ_الأرشفة'] = archive_time
                         arch_row = [hist.get(header, '') for header in arch_headers]
                         ws_archive_history.append_row(arch_row)
-                    # حذف السجلات من history
                     rows_to_delete = []
                     for i, r in enumerate(records):
                         if str(r.get('ID')) == str(transaction_id):
@@ -201,14 +241,12 @@ class GoogleSheetsClient:
                     for row_num in sorted(rows_to_delete, reverse=True):
                         ws_history.delete_row(row_num)
 
-            # حذف المعاملة من manager
             ws_manager.delete_row(row_number)
             return True
         except Exception as e:
             logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}", exc_info=True)
             return False
 
-    # رفع الملفات إلى Drive
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
             folder_id = self._get_or_create_folder(folder_name)

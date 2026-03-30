@@ -26,6 +26,18 @@ from config import Config
 from qr_generator import QRGenerator
 from ai_handler import AIAssistant
 
+# ------------------ التحقق من المتغيرات البيئية ------------------
+required_env_vars = ['GOOGLE_CREDENTIALS_JSON', 'SPREADSHEET_ID', 'TELEGRAM_BOT_TOKEN', 'WEB_APP_URL']
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    logging.error(f"❌ المتغيرات البيئية المفقودة: {', '.join(missing_vars)}")
+else:
+    logging.info("✅ جميع المتغيرات البيئية الأساسية موجودة")
+
+# طباعة بداية محتوى GOOGLE_CREDENTIALS_JSON للتأكد من وجوده (اختياري)
+creds_preview = os.getenv('GOOGLE_CREDENTIALS_JSON', '')[:100]
+logging.info(f"GOOGLE_CREDENTIALS_JSON (بداية): {creds_preview}...")
+
 # ------------------ إعداد التسجيل ------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -35,7 +47,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------ Google Sheets ------------------
-# سيتم تهيئتها عند بدء التشغيل، لكن سنعيد إنشائها إذا انقطعت
 sheets_client = None
 try:
     sheets_client = GoogleSheetsClient()
@@ -55,6 +66,19 @@ try:
 except Exception as e:
     logger.error(f"❌ فشل تهيئة Groq AI: {e}")
     ai_assistant = None
+
+# ------------------ فحص ورقة manager عند بدء التشغيل ------------------
+if sheets_client:
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if ws:
+        records = ws.get_all_records()
+        logger.info(f"📊 عدد المعاملات الحالي في ورقة manager: {len(records)}")
+        if len(records) > 0:
+            logger.info(f"📊 مثال على أول معاملة: {records[0]}")
+        else:
+            logger.info("الورقة manager فارغة")
+    else:
+        logger.error("❌ الورقة manager غير موجودة")
 
 # ------------------ دوال مساعدة عامة ------------------
 async def notify_user(transaction_id, message):
@@ -616,12 +640,10 @@ if Config.WEB_APP_URL and bot_app:
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
     global sheets_client
-    # إعادة إنشاء sheets_client إذا كان None (فقد الاتصال)
     if sheets_client is None:
         logger.error("sheets_client is None, attempting to reconnect...")
         try:
             sheets_client = GoogleSheetsClient()
-            # تحديث ai_assistant أيضاً (اختياري)
             global ai_assistant
             try:
                 ai_assistant = AIAssistant(sheets_client=sheets_client)
@@ -689,6 +711,12 @@ def api_submit():
                 new_row[idx] = edit_link
         ws.append_row(new_row)
         logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager (الصف الجديد)")
+
+        # سجلات إضافية لعدد الصفوف بعد الإضافة
+        all_rows = ws.get_all_values()
+        logger.info(f"📊 عدد الصفوف بعد الإضافة: {len(all_rows)}")
+        if all_rows:
+            logger.info(f"📊 آخر صف مضاف: {all_rows[-1]}")
 
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
@@ -1195,7 +1223,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+            </table>
         </div>
     </div>
     <script>
@@ -1208,7 +1236,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                  </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1755,9 +1783,14 @@ def check_new_transactions():
                 row_number = i + 2
                 new_row = records[i]
                 transaction_id = new_row.get('ID')
+                if not transaction_id:
+                    logger.warning(f"⚠️ صف {row_number} ليس له ID، سيتم معالجته لاحقًا")
+                    continue
                 executor.submit(process_new_transaction, ws, row_number, new_row, transaction_id)
             last_row_count = current_count
             logger.info(f"✅ تم تفويض المعاملات الجديدة للمعالجة المتوازية")
+        else:
+            logger.debug(f"لا توجد معاملات جديدة (last={last_row_count}, current={current_count})")
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
