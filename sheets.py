@@ -21,8 +21,9 @@ class GoogleSheetsClient:
             creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
-            self.spreadsheet = self.client.open("university system")
-            logger.info("✅ تم الاتصال بـ Google Sheets")
+            from config import Config
+            self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
+            logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
         except Exception as e:
