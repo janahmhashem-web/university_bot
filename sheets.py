@@ -1,11 +1,12 @@
 import os
 import json
+import logging
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+import uuid
 import tempfile
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,8 @@ class GoogleSheetsClient:
             creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
-            # تأكد من أن اسم الجدول مطابق تماماً لما في Google Sheets
-            self.spreadsheet = self.client.open("university system")  # غيّر الاسم إذا كان مختلفاً
+            # افتح الجدول باستخدام المعرف أو الاسم – هنا نستخدم الاسم
+            self.spreadsheet = self.client.open("university system")
             logger.info("✅ تم الاتصال بـ Google Sheets")
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
@@ -43,7 +44,8 @@ class GoogleSheetsClient:
             ],
             Config.SHEET_HISTORY: ["timestamp", "ID", "action", "user"],
             Config.SHEET_QR: ["name", "transaction_id", "view_link", "qr_image_url", "qr_page_link", "edit_link"],
-            Config.SHEET_USERS: ["transaction_id", "chat_id"]
+            Config.SHEET_USERS: ["transaction_id", "chat_id"],
+            Config.SHEET_ACCESS_TOKENS: ["token", "transaction_id", "email", "expires_at"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -90,7 +92,6 @@ class GoogleSheetsClient:
             ws = self.get_worksheet('history')
             if ws:
                 ws.append_row([datetime.now().isoformat(), transaction_id, action, user])
-                logger.info(f"📝 تم إضافة سجل تاريخ للمعاملة {transaction_id}")
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
@@ -99,7 +100,54 @@ class GoogleSheetsClient:
         if ws:
             ws.update_cell(row, col, value)
 
-    # ------------------ رفع الملفات إلى Google Drive ------------------
+    # دوال الرموز المؤقتة
+    def generate_access_token(self, transaction_id, email, expiry_minutes=60):
+        """توليد رمز وصول مؤقت مرتبط بالبريد الإلكتروني"""
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                return None
+            token = uuid.uuid4().hex
+            expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
+            ws.append_row([token, transaction_id, email, expires_at])
+            return token
+        except Exception as e:
+            logger.error(f"فشل توليد رمز الوصول: {e}")
+            return None
+
+    def verify_access_token(self, token, transaction_id):
+        """التحقق من صحة الرمز (لم ينتهِ ولنفس المعاملة)"""
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                return False
+            records = ws.get_all_records()
+            now = datetime.now().isoformat()
+            for row in records:
+                if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at = row.get('expires_at')
+                    if expires_at and expires_at > now:
+                        return True
+            return False
+        except Exception as e:
+            logger.error(f"فشل التحقق من رمز الوصول: {e}")
+            return False
+
+    def revoke_access_token(self, token):
+        """حذف الرمز بعد الاستخدام (اختياري)"""
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                return
+            records = ws.get_all_records()
+            for idx, row in enumerate(records):
+                if row.get('token') == token:
+                    ws.delete_row(idx+2)
+                    break
+        except Exception as e:
+            logger.error(f"فشل إبطال رمز الوصول: {e}")
+
+    # رفع الملفات إلى Drive
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
             folder_id = self._get_or_create_folder(folder_name)
