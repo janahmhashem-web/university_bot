@@ -35,6 +35,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------ Google Sheets ------------------
+# سيتم تهيئتها عند بدء التشغيل، لكن سنعيد إنشائها إذا انقطعت
+sheets_client = None
 try:
     sheets_client = GoogleSheetsClient()
     logger.info("✅ تم الاتصال بـ Google Sheets")
@@ -46,6 +48,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 
 # ------------------ الذكاء الاصطناعي ------------------
+ai_assistant = None
 try:
     ai_assistant = AIAssistant(sheets_client=sheets_client)
     logger.info("✅ تم تهيئة Groq AI")
@@ -612,6 +615,22 @@ if Config.WEB_APP_URL and bot_app:
 # ------------------ نقاط نهاية API ------------------
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
+    global sheets_client
+    # إعادة إنشاء sheets_client إذا كان None (فقد الاتصال)
+    if sheets_client is None:
+        logger.error("sheets_client is None, attempting to reconnect...")
+        try:
+            sheets_client = GoogleSheetsClient()
+            # تحديث ai_assistant أيضاً (اختياري)
+            global ai_assistant
+            try:
+                ai_assistant = AIAssistant(sheets_client=sheets_client)
+            except Exception as e:
+                logger.error(f"Failed to reinit AI: {e}")
+        except Exception as e:
+            logger.error(f"Reconnection failed: {e}")
+            return jsonify({'success': False, 'error': 'النظام غير متصل بقاعدة البيانات'}), 500
+
     try:
         name = request.form.get('name', '').strip()
         phone = request.form.get('phone', '').strip()
@@ -627,7 +646,6 @@ def api_submit():
             if file_link:
                 attachments = attachments_text + "\n" + file_link if attachments_text else file_link
 
-        # استخدام تنسيق الوقت بدون ميكروثانية
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1177,7 +1195,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-              </table>
+             </table>
         </div>
     </div>
     <script>
@@ -1190,7 +1208,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                  </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1296,7 +1314,7 @@ def register_transaction():
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>📝ستمارة التسجيل</h1>
+                    <h1>📝 تسجيل معاملة جديدة</h1>
                     <p>املأ البيانات التالية لتسجيل معاملتك</p>
                 </div>
                 <div class="content">
@@ -1306,11 +1324,11 @@ def register_transaction():
                     <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder>
+                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder=>
+                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
