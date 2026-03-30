@@ -21,7 +21,6 @@ class GoogleSheetsClient:
             creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
-            # افتح الجدول باستخدام المعرف أو الاسم – هنا نستخدم الاسم
             self.spreadsheet = self.client.open("university system")
             logger.info("✅ تم الاتصال بـ Google Sheets")
             self._init_sheets()
@@ -45,7 +44,16 @@ class GoogleSheetsClient:
             Config.SHEET_HISTORY: ["timestamp", "ID", "action", "user"],
             Config.SHEET_QR: ["name", "transaction_id", "view_link", "qr_image_url", "qr_page_link", "edit_link"],
             Config.SHEET_USERS: ["transaction_id", "chat_id"],
-            Config.SHEET_ACCESS_TOKENS: ["token", "transaction_id", "email", "expires_at"]
+            Config.SHEET_ACCESS_TOKENS: ["token", "transaction_id", "email", "expires_at"],
+            Config.SHEET_ARCHIVE_MANAGER: [
+                "Timestamp", "اسم صاحب المعاملة الثلاثي", "رقم الهاتف",
+                "الوظيفة", "القسم", "نوع المعاملة", "المرافقات", "ID", "الحالة", "الأولوية",
+                "الموظف المسؤول", "المؤسسة الحالية", "المؤسسة التالية", "تاريخ التحويل",
+                "سبب التحويل", "الموافق", "ملاحظات إضافية", "آخر إجراء", "التأخير",
+                "المستمسكات المطلوبة", "الرابط", "آخر تعديل بواسطة", "آخر تعديل بتاريخ",
+                "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON", "تاريخ_الأرشفة"
+            ],
+            Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -91,7 +99,9 @@ class GoogleSheetsClient:
         try:
             ws = self.get_worksheet('history')
             if ws:
-                ws.append_row([datetime.now().isoformat(), transaction_id, action, user])
+                now = datetime.now()
+                timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+                ws.append_row([timestamp, transaction_id, action, user])
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
@@ -100,9 +110,7 @@ class GoogleSheetsClient:
         if ws:
             ws.update_cell(row, col, value)
 
-    # دوال الرموز المؤقتة
     def generate_access_token(self, transaction_id, email, expiry_minutes=60):
-        """توليد رمز وصول مؤقت مرتبط بالبريد الإلكتروني"""
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
@@ -116,7 +124,6 @@ class GoogleSheetsClient:
             return None
 
     def verify_access_token(self, token, transaction_id):
-        """التحقق من صحة الرمز (لم ينتهِ ولنفس المعاملة)"""
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
@@ -134,7 +141,6 @@ class GoogleSheetsClient:
             return False
 
     def revoke_access_token(self, token):
-        """حذف الرمز بعد الاستخدام (اختياري)"""
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
@@ -146,6 +152,59 @@ class GoogleSheetsClient:
                     break
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
+
+    def archive_transaction(self, transaction_id):
+        """نقل المعاملة وسجلها التاريخي إلى الأرشيف"""
+        try:
+            ws_manager = self.get_worksheet('manager')
+            if not ws_manager:
+                return False
+            row_info = self.get_row_by_id('manager', transaction_id)
+            if not row_info:
+                return False
+            row_number = row_info['row']
+            data = row_info['data']
+
+            # إضافة تاريخ الأرشفة
+            now = datetime.now()
+            archive_time = now.strftime("%Y-%m-%d %H:%M:%S")
+            data['تاريخ_الأرشفة'] = archive_time
+
+            # إدراج في archive_manager
+            ws_archive_manager = self.get_worksheet('archive_manager')
+            if not ws_archive_manager:
+                logger.error("ورقة archive_manager غير موجودة")
+                return False
+            headers = ws_archive_manager.row_values(1)
+            new_row = [data.get(header, '') for header in headers]
+            ws_archive_manager.append_row(new_row)
+
+            # جلب سجل التاريخ
+            ws_history = self.get_worksheet('history')
+            if ws_history:
+                records = ws_history.get_all_records()
+                history_rows = [r for r in records if str(r.get('ID')) == str(transaction_id)]
+                ws_archive_history = self.get_worksheet('archive_history')
+                if ws_archive_history:
+                    arch_headers = ws_archive_history.row_values(1)
+                    for hist in history_rows:
+                        hist['تاريخ_الأرشفة'] = archive_time
+                        arch_row = [hist.get(header, '') for header in arch_headers]
+                        ws_archive_history.append_row(arch_row)
+                    # حذف السجلات من history
+                    rows_to_delete = []
+                    for i, r in enumerate(records):
+                        if str(r.get('ID')) == str(transaction_id):
+                            rows_to_delete.append(i+2)
+                    for row_num in sorted(rows_to_delete, reverse=True):
+                        ws_history.delete_row(row_num)
+
+            # حذف المعاملة من manager
+            ws_manager.delete_row(row_number)
+            return True
+        except Exception as e:
+            logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}", exc_info=True)
+            return False
 
     # رفع الملفات إلى Drive
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):

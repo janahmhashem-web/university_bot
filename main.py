@@ -627,7 +627,9 @@ def api_submit():
             if file_link:
                 attachments = attachments_text + "\n" + file_link if attachments_text else file_link
 
-        timestamp = datetime.now().isoformat()
+        # استخدام تنسيق الوقت بدون ميكروثانية
+        now = datetime.now()
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
 
         if not name or not phone:
             return jsonify({'success': False, 'error': 'الاسم والهاتف مطلوبان'}), 400
@@ -640,8 +642,8 @@ def api_submit():
             logger.error("❌ ورقة manager غير موجودة")
             return jsonify({'success': False, 'error': 'ورقة manager غير موجودة'}), 500
 
-        now = datetime.now()
-        date_str = now.strftime("%Y%m%d%H%M%S")
+        now_id = datetime.now()
+        date_str = now_id.strftime("%Y%m%d%H%M%S")
         random_part = random.randint(1000, 9999)
         transaction_id = f"MUT-{date_str}-{random_part}"
 
@@ -758,7 +760,8 @@ def api_transaction(id):
                 ws.update_cell(row, col, value)
 
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
-        now = datetime.now().isoformat()
+        now = datetime.now()
+        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
         try:
             col_last_modified_by = headers.index('آخر تعديل بواسطة') + 1
@@ -776,7 +779,7 @@ def api_transaction(id):
         if col_last_modified_by:
             ws.update_cell(row, col_last_modified_by, employee_name)
         if col_last_modified_date:
-            ws.update_cell(row, col_last_modified_date, now)
+            ws.update_cell(row, col_last_modified_date, now_str)
         if col_modification_count:
             try:
                 current_count = int(ws.cell(row, col_modification_count).value or 0)
@@ -1174,7 +1177,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-            </table>
+              </table>
         </div>
     </div>
     <script>
@@ -1187,7 +1190,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
+                  </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1293,7 +1296,7 @@ def register_transaction():
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>📝 تسجيل معاملة جديدة</h1>
+                    <h1>📝ستمارة التسجيل</h1>
                     <p>املأ البيانات التالية لتسجيل معاملتك</p>
                 </div>
                 <div class="content">
@@ -1307,7 +1310,7 @@ def register_transaction():
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder>
+                            <input type="text" id="phone" name="phone" required placeholder=>
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
@@ -1706,8 +1709,10 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
 
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         if history_ws:
+            now = datetime.now()
+            timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
             history_ws.append_row([
-                datetime.now().isoformat(),
+                timestamp,
                 transaction_id,
                 "تم إنشاء المعاملة",
                 "النظام (API)"
