@@ -66,6 +66,19 @@ except Exception as e:
     logger.error(f"❌ فشل تهيئة Groq AI: {e}")
     ai_assistant = None
 
+# ------------------ فحص ورقة manager عند بدء التشغيل ------------------
+if sheets_client:
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if ws:
+        records = ws.get_all_records()
+        logger.info(f"📊 عدد المعاملات الحالي في ورقة manager: {len(records)}")
+        if len(records) > 0:
+            logger.info(f"📊 مثال على أول معاملة: {records[0]}")
+        else:
+            logger.info("الورقة manager فارغة")
+    else:
+        logger.error("❌ الورقة manager غير موجودة")
+
 # ------------------ دوال مساعدة عامة ------------------
 async def notify_user(transaction_id, message):
     if not sheets_client or not bot_app or not background_loop:
@@ -699,7 +712,7 @@ def api_submit():
         if all_rows:
             logger.info(f"📊 آخر صف مضاف: {all_rows[-1]}")
 
-        # ------------------ ورقة QR (الأعمدة الجديدة فقط) ------------------
+        # ورقة QR (الأعمدة الجديدة)
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             verify_link = f"{Config.WEB_APP_URL}/verify-email?transaction_id={transaction_id}"
@@ -764,7 +777,6 @@ def api_transactions():
     } for r in records]
     return jsonify(result)
 
-# ================== نقطة تعديل المعاملة (إضافة صف جديد) ==================
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
     if not sheets_client:
@@ -785,7 +797,6 @@ def api_transaction(id):
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        # إنشاء صف جديد
         new_row = [''] * len(headers)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now()
@@ -807,13 +818,11 @@ def api_transaction(id):
                 value = current_count + 1
             new_row[idx] = value
 
-        # إضافة الصف الجديد (وليس تحديث الصف القديم)
         ws.append_row(new_row)
 
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # بناء رسالة الإشعار للمستخدم
         user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
@@ -851,7 +860,6 @@ def api_transaction(id):
                 background_loop
             )
 
-        # أرشفة إذا أصبحت مكتملة
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
                 archive_success = sheets_client.archive_transaction(id)
@@ -880,7 +888,7 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحة التحقق بالبريد ------------------
+# ------------------ صفحة التحقق بالبريد (المسار المفقود) ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
 def verify_email_page():
     transaction_id = request.args.get('transaction_id')
@@ -1194,7 +1202,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-              </table>
+            </table>
         </div>
     </div>
     <script>
@@ -1207,7 +1215,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                  </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1323,11 +1331,11 @@ def register_transaction():
                     <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder>
+                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder=>
+                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
@@ -1686,9 +1694,6 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
             ws.update_cell(row_number, link_col, hyperlink_formula)
         except ValueError:
             ws.update_cell(row_number, 21, hyperlink_formula)
-
-        # ورقة QR لم تعد تُستخدم هنا، لأننا نضيف بيانات QR في api_submit
-        # لكننا نحتفظ بالكود للتوافق مع المعاملات القديمة
 
         customer_email = new_row.get('البريد الإلكتروني')
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
