@@ -173,7 +173,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         transaction_id = args[0]
         if sheets_client:
-            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)  # أحدث صف
+            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
             if row_info:
                 save_user_chat(transaction_id, user_id)
                 await update.message.reply_text(
@@ -300,7 +300,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if context.args:
             transaction_id = context.args[0]
             logger.info(f"🔍 البحث عن ID: {transaction_id}")
-            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)  # أحدث صف
+            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
             if row_info:
                 data = row_info['data']
                 msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
@@ -447,7 +447,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("الرجاء إدخال رقم المعاملة: /analyze MUT-123456")
             return
         transaction_id = context.args[0]
-        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)  # أحدث صف
+        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
         if not row_info:
             await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
             return
@@ -769,7 +769,6 @@ def api_transactions():
     if not sheets_client:
         return jsonify([])
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
-    # إرجاع أحدث صف لكل ID؟ للبساطة نرجع جميع الصفوف
     result = [{
         'id': r.get('ID', ''),
         'name': r.get('اسم صاحب المعاملة الثلاثي', ''),
@@ -778,13 +777,13 @@ def api_transactions():
     } for r in records]
     return jsonify(result)
 
+# ------------------ النقطة الأهم: تعديل المعاملة (إضافة صف جديد) ------------------
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
     if not sheets_client:
         return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
 
     if request.method == 'GET':
-        # إرجاع أحدث صف للمعاملة
         data = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
         if not data:
             return jsonify({'error': 'Not found'}), 404
@@ -792,7 +791,7 @@ def api_transaction(id):
 
     else:
         updates = request.json
-        # جلب أحدث صف للمعاملة (لأخذ البيانات القديمة)
+        # جلب أحدث صف للمعاملة
         row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
         if not row_info:
             return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
@@ -800,7 +799,7 @@ def api_transaction(id):
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        # إنشاء صف جديد يحتوي على جميع البيانات القديمة + التحديثات
+        # إنشاء صف جديد
         new_row = [''] * len(headers)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now()
@@ -824,10 +823,11 @@ def api_transaction(id):
 
         ws.append_row(new_row)
 
+        # تسجيل التغيير في history
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # بناء رسالة إشعار للمستخدم (مختصرة)
+        # بناء رسالة الإشعار للمستخدم
         user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
@@ -919,7 +919,6 @@ def verify_email_page():
         edit_url = f"{Config.WEB_APP_URL}/transaction/{transaction_id}?token={token}"
         return redirect(edit_url)
 
-    # عرض صفحة إدخال البريد
     return '''
     <!DOCTYPE html>
     <html dir="rtl">

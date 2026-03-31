@@ -26,7 +26,6 @@ class GoogleSheetsClient:
             from config import Config
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
             logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
-            # تأخير عشوائي لتجنب تداخل الطلبات بين العمال
             time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
@@ -73,7 +72,6 @@ class GoogleSheetsClient:
                         break
                     else:
                         existing_headers = ws.row_values(1)
-                        # إضافة الأعمدة المفقودة فقط
                         for col, header in enumerate(required_headers, 1):
                             if header not in existing_headers:
                                 ws.update_cell(1, col, header)
@@ -103,7 +101,23 @@ class GoogleSheetsClient:
             return ws.get_all_records()
         return []
 
+    def get_latest_row_by_id(self, sheet_name, transaction_id):
+        """إرجاع أحدث صف (آخر إضافة) للمعاملة حسب ID"""
+        ws = self.get_worksheet(sheet_name)
+        if not ws:
+            return None
+        records = ws.get_all_records()
+        latest = None
+        latest_row = 0
+        for idx, row in enumerate(records):
+            if str(row.get('ID')) == str(transaction_id):
+                if idx + 2 > latest_row:
+                    latest_row = idx + 2
+                    latest = {'row': latest_row, 'data': row}
+        return latest
+
     def get_row_by_id(self, sheet_name, transaction_id):
+        """إرجاع أول صف (قديم) للمعاملة (محافظة على التوافق)"""
         ws = self.get_worksheet(sheet_name)
         if not ws:
             return None
@@ -177,7 +191,8 @@ class GoogleSheetsClient:
             ws_manager = self.get_worksheet('manager')
             if not ws_manager:
                 return False
-            row_info = self.get_row_by_id('manager', transaction_id)
+            # نحتاج لأحدث صف للمعاملة (آخر تحديث)
+            row_info = self.get_latest_row_by_id('manager', transaction_id)
             if not row_info:
                 return False
             row_number = row_info['row']
@@ -206,6 +221,7 @@ class GoogleSheetsClient:
                         hist['تاريخ_الأرشفة'] = archive_time
                         arch_row = [hist.get(header, '') for header in arch_headers]
                         ws_archive_history.append_row(arch_row)
+                    # حذف السجلات من history
                     rows_to_delete = []
                     for i, r in enumerate(records):
                         if str(r.get('ID')) == str(transaction_id):
@@ -213,7 +229,22 @@ class GoogleSheetsClient:
                     for row_num in sorted(rows_to_delete, reverse=True):
                         ws_history.delete_row(row_num)
 
-            ws_manager.delete_row(row_number)
+            # حذف جميع صفوف المعاملة من manager (قد تكون متعددة)
+            all_rows = ws_manager.get_all_values()
+            headers = ws_manager.row_values(1)
+            id_col = None
+            try:
+                id_col = headers.index('ID') + 1
+            except ValueError:
+                pass
+            if id_col:
+                rows_to_delete = []
+                for i, row in enumerate(all_rows):
+                    if i == 0: continue
+                    if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
+                        rows_to_delete.append(i+1)
+                for row_num in sorted(rows_to_delete, reverse=True):
+                    ws_manager.delete_row(row_num)
             return True
         except Exception as e:
             logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}", exc_info=True)
