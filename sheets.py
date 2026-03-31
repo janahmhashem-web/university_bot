@@ -163,34 +163,58 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
-    def generate_access_token(self, transaction_id, email, expiry_minutes=60):
+    def generate_access_token(self, transaction_id, email, expiry_minutes=1440):
+        """
+        توليد رمز وصول صالح لمدة 24 ساعة (1440 دقيقة)
+        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
                 return None
             token = uuid.uuid4().hex
             expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
             ws.append_row([token, transaction_id, email, expires_at])
+            logger.info(f"✅ تم توليد رمز وصول للمعاملة {transaction_id} ينتهي بعد {expiry_minutes} دقيقة")
             return token
         except Exception as e:
-            logger.error(f"فشل توليد رمز الوصول: {e}")
+            logger.error(f"فشل توليد رمز الوصول: {e}", exc_info=True)
             return None
 
     def verify_access_token(self, token, transaction_id):
+        """
+        التحقق من صحة رمز الوصول وعدم انتهاء صلاحيته
+        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
                 return False
             records = ws.get_all_records()
-            now = datetime.now().isoformat()
+            now = datetime.now()  # كائن datetime للمقارنة
             for row in records:
                 if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
-                    expires_at = row.get('expires_at')
-                    if expires_at and expires_at > now:
+                    expires_at_str = row.get('expires_at')
+                    if not expires_at_str:
+                        logger.warning(f"رمز {token} ليس له expires_at")
+                        continue
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at_str)
+                    except ValueError:
+                        # محاولة تنسيق آخر (بدون microseconds)
+                        try:
+                            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            logger.error(f"تنسيق تاريخ غير معروف: {expires_at_str}")
+                            continue
+                    if expires_at > now:
                         return True
+                    else:
+                        logger.warning(f"Token منتهي الصلاحية: {expires_at} < {now}")
+                        return False
             return False
         except Exception as e:
-            logger.error(f"فشل التحقق من رمز الوصول: {e}")
+            logger.error(f"فشل التحقق من رمز الوصول: {e}", exc_info=True)
             return False
 
     def revoke_access_token(self, token):
