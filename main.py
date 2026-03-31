@@ -26,6 +26,17 @@ from config import Config
 from qr_generator import QRGenerator
 from ai_handler import AIAssistant
 
+# ------------------ التحقق من المتغيرات البيئية ------------------
+required_env_vars = ['GOOGLE_CREDENTIALS_JSON', 'SPREADSHEET_ID', 'TELEGRAM_BOT_TOKEN', 'WEB_APP_URL']
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    logging.error(f"❌ المتغيرات البيئية المفقودة: {', '.join(missing_vars)}")
+else:
+    logging.info("✅ جميع المتغيرات البيئية الأساسية موجودة")
+
+creds_preview = os.getenv('GOOGLE_CREDENTIALS_JSON', '')[:100]
+logging.info(f"GOOGLE_CREDENTIALS_JSON (بداية): {creds_preview}...")
+
 # ------------------ إعداد التسجيل ------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -35,7 +46,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------ Google Sheets ------------------
-# سيتم تهيئتها عند بدء التشغيل، لكن سنعيد إنشائها إذا انقطعت
 sheets_client = None
 try:
     sheets_client = GoogleSheetsClient()
@@ -55,6 +65,19 @@ try:
 except Exception as e:
     logger.error(f"❌ فشل تهيئة Groq AI: {e}")
     ai_assistant = None
+
+# ------------------ فحص ورقة manager عند بدء التشغيل ------------------
+if sheets_client:
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if ws:
+        records = ws.get_all_records()
+        logger.info(f"📊 عدد المعاملات الحالي في ورقة manager: {len(records)}")
+        if len(records) > 0:
+            logger.info(f"📊 مثال على أول معاملة: {records[0]}")
+        else:
+            logger.info("الورقة manager فارغة")
+    else:
+        logger.error("❌ الورقة manager غير موجودة")
 
 # ------------------ دوال مساعدة عامة ------------------
 async def notify_user(transaction_id, message):
@@ -150,7 +173,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         transaction_id = args[0]
         if sheets_client:
-            row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)  # أحدث صف
             if row_info:
                 save_user_chat(transaction_id, user_id)
                 await update.message.reply_text(
@@ -277,7 +300,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if context.args:
             transaction_id = context.args[0]
             logger.info(f"🔍 البحث عن ID: {transaction_id}")
-            row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)  # أحدث صف
             if row_info:
                 data = row_info['data']
                 msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
@@ -424,7 +447,7 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("الرجاء إدخال رقم المعاملة: /analyze MUT-123456")
             return
         transaction_id = context.args[0]
-        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)  # أحدث صف
         if not row_info:
             await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
             return
@@ -616,12 +639,10 @@ if Config.WEB_APP_URL and bot_app:
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
     global sheets_client
-    # إعادة إنشاء sheets_client إذا كان None (فقد الاتصال)
     if sheets_client is None:
         logger.error("sheets_client is None, attempting to reconnect...")
         try:
             sheets_client = GoogleSheetsClient()
-            # تحديث ai_assistant أيضاً (اختياري)
             global ai_assistant
             try:
                 ai_assistant = AIAssistant(sheets_client=sheets_client)
@@ -690,6 +711,11 @@ def api_submit():
         ws.append_row(new_row)
         logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager (الصف الجديد)")
 
+        all_rows = ws.get_all_values()
+        logger.info(f"📊 عدد الصفوف بعد الإضافة: {len(all_rows)}")
+        if all_rows:
+            logger.info(f"📊 آخر صف مضاف: {all_rows[-1]}")
+
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
@@ -743,6 +769,7 @@ def api_transactions():
     if not sheets_client:
         return jsonify([])
     records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    # إرجاع أحدث صف لكل ID؟ للبساطة نرجع جميع الصفوف
     result = [{
         'id': r.get('ID', ''),
         'name': r.get('اسم صاحب المعاملة الثلاثي', ''),
@@ -757,57 +784,50 @@ def api_transaction(id):
         return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
 
     if request.method == 'GET':
-        data = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
+        # إرجاع أحدث صف للمعاملة
+        data = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
         if not data:
             return jsonify({'error': 'Not found'}), 404
         return jsonify(data['data'])
 
     else:
         updates = request.json
-        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
+        # جلب أحدث صف للمعاملة (لأخذ البيانات القديمة)
+        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
         if not row_info:
-            return jsonify({'success': False, 'message': 'المعاملة غير موجودة'})
-        row = row_info['row']
+            return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
         old_data = row_info['data']
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        for key, value in updates.items():
-            if key in headers:
-                col = headers.index(key) + 1
-                ws.update_cell(row, col, value)
-
+        # إنشاء صف جديد يحتوي على جميع البيانات القديمة + التحديثات
+        new_row = [''] * len(headers)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now()
         now_str = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        try:
-            col_last_modified_by = headers.index('آخر تعديل بواسطة') + 1
-        except ValueError:
-            col_last_modified_by = None
-        try:
-            col_last_modified_date = headers.index('آخر تعديل بتاريخ') + 1
-        except ValueError:
-            col_last_modified_date = None
-        try:
-            col_modification_count = headers.index('عدد التعديلات') + 1
-        except ValueError:
-            col_modification_count = None
+        for idx, header in enumerate(headers):
+            value = old_data.get(header, '')
+            if header in updates:
+                value = updates[header]
+            if header == 'آخر تعديل بواسطة':
+                value = employee_name
+            elif header == 'آخر تعديل بتاريخ':
+                value = now_str
+            elif header == 'عدد التعديلات':
+                try:
+                    current_count = int(old_data.get(header, 0))
+                except:
+                    current_count = 0
+                value = current_count + 1
+            new_row[idx] = value
 
-        if col_last_modified_by:
-            ws.update_cell(row, col_last_modified_by, employee_name)
-        if col_last_modified_date:
-            ws.update_cell(row, col_last_modified_date, now_str)
-        if col_modification_count:
-            try:
-                current_count = int(ws.cell(row, col_modification_count).value or 0)
-            except:
-                current_count = 0
-            ws.update_cell(row, col_modification_count, current_count + 1)
+        ws.append_row(new_row)
 
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
+        # بناء رسالة إشعار للمستخدم (مختصرة)
         user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
@@ -837,7 +857,6 @@ def api_transaction(id):
 
         if user_message == f"✏️ *معاملتك {id} تم تحديثها*\n\n":
             user_message += "تم تحديث بيانات المعاملة.\n"
-
         user_message += f"\n🔍 لمتابعة كل التغييرات: `/history {id}`"
 
         if background_loop and bot_app:
@@ -846,7 +865,7 @@ def api_transaction(id):
                 background_loop
             )
 
-        # أرشفة المعاملة إذا أصبحت مكتملة
+        # أرشفة إذا أصبحت مكتملة
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
                 archive_success = sheets_client.archive_transaction(id)
@@ -856,7 +875,7 @@ def api_transaction(id):
                     return jsonify({'success': True, 'message': 'تم الحفظ ولكن فشلت الأرشفة'})
             else:
                 logger.warning("archive_transaction غير متوفر في sheets_client")
-        return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
+        return jsonify({'success': True, 'message': 'تم إضافة سجل التحديث بنجاح'})
 
 @app.route('/api/history/<id>')
 def api_transaction_history(id):
@@ -875,15 +894,14 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحة التحقق بالبريد الإلكتروني ------------------
+# ------------------ صفحة التحقق بالبريد ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
 def verify_email_page():
     transaction_id = request.args.get('transaction_id')
     if not transaction_id:
         return "❌ المعاملة غير معروفة", 400
 
-    # التحقق من وجود المعاملة
-    row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, transaction_id)
+    row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
     if not row_info:
         return "❌ المعاملة غير موجودة", 404
 
@@ -891,17 +909,13 @@ def verify_email_page():
         email = request.form.get('email', '').strip()
         if not email:
             return "الرجاء إدخال البريد الإلكتروني", 400
-
-        # التحقق من النطاق
         if not email.endswith('@it.jan.ah'):
             return f"🚫 غير مصرح: البريد الإلكتروني يجب أن ينتهي بـ @it.jan.ah", 403
 
-        # توليد رمز وصول
         token = sheets_client.generate_access_token(transaction_id, email)
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
 
-        # إعادة التوجيه إلى صفحة التعديل مع الرمز
         edit_url = f"{Config.WEB_APP_URL}/transaction/{transaction_id}?token={token}"
         return redirect(edit_url)
 
@@ -942,7 +956,7 @@ def verify_email_page():
     </html>
     '''
 
-# ------------------ صفحة تعديل المعاملة (للموظف) ------------------
+# ------------------ صفحة تعديل المعاملة ------------------
 EDIT_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -1167,7 +1181,7 @@ def edit_transaction_page(id):
         abort(403, description="رمز الوصول غير صالح أو منتهي الصلاحية.")
     return render_template_string(EDIT_HTML)
 
-# ------------------ صفحة المدير (محمية) ------------------
+# ------------------ صفحة المدير ------------------
 INDEX_HTML = """<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
@@ -1195,7 +1209,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+            </table>
         </div>
     </div>
     <script>
@@ -1208,7 +1222,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1540,7 +1554,7 @@ def view_transaction_page(id):
         if not sheets_client:
             return "⚠️ النظام غير متصل بقاعدة البيانات", 500
 
-        row_info = sheets_client.get_row_by_id(Config.SHEET_MANAGER, id)
+        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
         if not row_info:
             return f"❌ المعاملة {id} غير موجودة", 404
 
@@ -1755,9 +1769,14 @@ def check_new_transactions():
                 row_number = i + 2
                 new_row = records[i]
                 transaction_id = new_row.get('ID')
+                if not transaction_id:
+                    logger.warning(f"⚠️ صف {row_number} ليس له ID، سيتم معالجته لاحقًا")
+                    continue
                 executor.submit(process_new_transaction, ws, row_number, new_row, transaction_id)
             last_row_count = current_count
             logger.info(f"✅ تم تفويض المعاملات الجديدة للمعالجة المتوازية")
+        else:
+            logger.debug(f"لا توجد معاملات جديدة (last={last_row_count}, current={current_count})")
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
