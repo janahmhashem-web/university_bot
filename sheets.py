@@ -95,6 +95,7 @@ class GoogleSheetsClient:
         except Exception:
             return None
 
+    # ------------------ الدوال القديمة (للتوافق) ------------------
     def get_all_records(self, sheet_name):
         ws = self.get_worksheet(sheet_name)
         if ws:
@@ -102,7 +103,6 @@ class GoogleSheetsClient:
         return []
 
     def get_latest_row_by_id(self, sheet_name, transaction_id):
-        """إرجاع أحدث صف (آخر إضافة) للمعاملة حسب ID"""
         ws = self.get_worksheet(sheet_name)
         if not ws:
             return None
@@ -117,7 +117,6 @@ class GoogleSheetsClient:
         return latest
 
     def get_row_by_id(self, sheet_name, transaction_id):
-        """إرجاع أول صف (قديم) للمعاملة (محافظة على التوافق)"""
         ws = self.get_worksheet(sheet_name)
         if not ws:
             return None
@@ -142,6 +141,7 @@ class GoogleSheetsClient:
         if ws:
             ws.update_cell(row, col, value)
 
+    # ------------------ دوال الرموز المؤقتة ------------------
     def generate_access_token(self, transaction_id, email, expiry_minutes=60):
         try:
             ws = self.get_worksheet('access_tokens')
@@ -185,13 +185,12 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
 
+    # ------------------ دوال الأرشفة ------------------
     def archive_transaction(self, transaction_id):
-        """نقل المعاملة وسجلها التاريخي إلى الأرشيف"""
         try:
             ws_manager = self.get_worksheet('manager')
             if not ws_manager:
                 return False
-            # نحتاج لأحدث صف للمعاملة (آخر تحديث)
             row_info = self.get_latest_row_by_id('manager', transaction_id)
             if not row_info:
                 return False
@@ -221,7 +220,6 @@ class GoogleSheetsClient:
                         hist['تاريخ_الأرشفة'] = archive_time
                         arch_row = [hist.get(header, '') for header in arch_headers]
                         ws_archive_history.append_row(arch_row)
-                    # حذف السجلات من history
                     rows_to_delete = []
                     for i, r in enumerate(records):
                         if str(r.get('ID')) == str(transaction_id):
@@ -229,7 +227,7 @@ class GoogleSheetsClient:
                     for row_num in sorted(rows_to_delete, reverse=True):
                         ws_history.delete_row(row_num)
 
-            # حذف جميع صفوف المعاملة من manager (قد تكون متعددة)
+            # حذف جميع صفوف المعاملة من manager
             all_rows = ws_manager.get_all_values()
             headers = ws_manager.row_values(1)
             id_col = None
@@ -250,6 +248,7 @@ class GoogleSheetsClient:
             logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}", exc_info=True)
             return False
 
+    # ------------------ دوال رفع الملفات ------------------
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
             folder_id = self._get_or_create_folder(folder_name)
@@ -288,3 +287,80 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل البحث/إنشاء المجلد: {e}")
             raise
+
+    # ================== التحسينات السريعة الجديدة ==================
+    def get_latest_transactions_fast(self, sheet_name):
+        """إرجاع أحدث نسخة لكل معاملة (سريع باستخدام get_all_values)"""
+        ws = self.get_worksheet(sheet_name)
+        if not ws:
+            return []
+
+        data = ws.get_all_values()
+        if len(data) < 2:
+            return []
+
+        headers = data[0]
+        rows = data[1:]
+
+        latest = {}
+
+        for row in rows:
+            row_dict = dict(zip(headers, row))
+            transaction_id = str(row_dict.get("ID"))
+
+            # نخلي آخر نسخة (الأحدث)
+            latest[transaction_id] = row_dict
+
+        return list(latest.values())
+
+    def get_latest_transactions_sorted_fast(self, sheet_name):
+        """إرجاع أحدث المعاملات مرتبة حسب آخر تعديل (الأحدث أولاً)"""
+        data = self.get_latest_transactions_fast(sheet_name)
+
+        def parse_date(row):
+            try:
+                return datetime.strptime(row.get("آخر تعديل بتاريخ", ""), "%Y-%m-%d %H:%M:%S")
+            except:
+                return datetime.min
+
+        return sorted(data, key=parse_date, reverse=True)
+
+    def filter_transactions(self, sheet_name, status=None, employee=None, department=None):
+        """فلترة المعاملات حسب الحالة، الموظف المسؤول، القسم"""
+        data = self.get_latest_transactions_fast(sheet_name)
+
+        results = []
+
+        for row in data:
+            if status and row.get("الحالة") != status:
+                continue
+            if employee and row.get("الموظف المسؤول") != employee:
+                continue
+            if department and row.get("القسم") != department:
+                continue
+
+            results.append(row)
+
+        return results
+
+    def filter_and_sort_transactions(self, sheet_name, status=None, employee=None):
+        """فلترة وترتيب (أسرع طريقة)"""
+        data = self.filter_transactions(sheet_name, status, employee)
+
+        def parse_date(row):
+            try:
+                return datetime.strptime(row.get("آخر تعديل بتاريخ", ""), "%Y-%m-%d %H:%M:%S")
+            except:
+                return datetime.min
+
+        return sorted(data, key=parse_date, reverse=True)
+
+    def get_latest_row_by_id_fast(self, sheet_name, transaction_id):
+        """جلب أحدث صف لمعاملة معينة (سريع)"""
+        data = self.get_latest_transactions_fast(sheet_name)
+
+        for row in data:
+            if str(row.get("ID")) == str(transaction_id):
+                return row
+
+        return None

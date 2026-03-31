@@ -124,7 +124,7 @@ def save_user_chat(transaction_id, chat_id):
 def get_all_transactions_list():
     if not sheets_client:
         return "⚠️ النظام غير متصل بقاعدة البيانات."
-    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
     if not records:
         return "لا توجد معاملات حتى الآن."
     result = "📋 *قائمة جميع المعاملات:*\n"
@@ -135,19 +135,18 @@ def get_all_transactions_list():
 def get_transactions_by_status(status):
     if not sheets_client:
         return "⚠️ النظام غير متصل بقاعدة البيانات."
-    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
-    filtered = [r for r in records if r.get('الحالة') == status]
-    if not filtered:
+    records = sheets_client.filter_transactions(Config.SHEET_MANAGER, status=status)
+    if not records:
         return f"لا توجد معاملات بالحالة '{status}'."
     result = f"📋 *المعاملات بحالة {status}:*\n"
-    for r in filtered:
+    for r in records:
         result += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')}\n"
     return result
 
 def get_transactions_with_errors():
     if not sheets_client:
         return "⚠️ النظام غير متصل بقاعدة البيانات."
-    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
     errors = []
     for r in records:
         if r.get('الحالة') == 'خطأ':
@@ -173,8 +172,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         transaction_id = args[0]
         if sheets_client:
-            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
-            if row_info:
+            data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
+            if data:
                 save_user_chat(transaction_id, user_id)
                 await update.message.reply_text(
                     f"✅ تم ربط حسابك بالمعاملة\n\n"
@@ -285,7 +284,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not sheets_client:
             await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
             return
-        records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+        records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
         total = len(records)
         completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
         pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
@@ -300,9 +299,8 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if context.args:
             transaction_id = context.args[0]
             logger.info(f"🔍 البحث عن ID: {transaction_id}")
-            row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
-            if row_info:
-                data = row_info['data']
+            data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
+            if data:
                 msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
                 for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
                     if key in data and data[key]:
@@ -354,7 +352,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if context.args:
             keyword = ' '.join(context.args)
-            records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+            records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
             found = []
             for r in records:
                 if keyword in str(r.values()):
@@ -381,7 +379,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not sheets_client:
             await update.message.reply_text("⚠️ غير متصل بقاعدة البيانات.")
             return
-        records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+        records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
         total = len(records)
         completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
         pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
@@ -447,11 +445,11 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("الرجاء إدخال رقم المعاملة: /analyze MUT-123456")
             return
         transaction_id = context.args[0]
-        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
-        if not row_info:
+        data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
+        if not data:
             await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
             return
-        transaction_data = row_info['data']
+        transaction_data = data
         ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         history = []
         if ws:
@@ -768,38 +766,44 @@ def api_headers():
 def api_transactions():
     if not sheets_client:
         return jsonify([])
-    records = sheets_client.get_all_records(Config.SHEET_MANAGER)
+    status = request.args.get('status')
+    employee = request.args.get('employee')
+    department = request.args.get('department')
+    if status or employee or department:
+        records = sheets_client.filter_transactions(Config.SHEET_MANAGER, status, employee, department)
+    else:
+        records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
     result = [{
         'id': r.get('ID', ''),
         'name': r.get('اسم صاحب المعاملة الثلاثي', ''),
         'status': r.get('الحالة', ''),
-        'employee': r.get('الموظف المسؤول', '')
+        'employee': r.get('الموظف المسؤول', ''),
+        'department': r.get('القسم', ''),
+        'last_modified': r.get('آخر تعديل بتاريخ', '')
     } for r in records]
     return jsonify(result)
 
-# ------------------ النقطة الأهم: تعديل المعاملة (إضافة صف جديد) ------------------
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
     if not sheets_client:
         return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
 
     if request.method == 'GET':
-        data = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
+        data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
         if not data:
             return jsonify({'error': 'Not found'}), 404
-        return jsonify(data['data'])
+        return jsonify(data)
 
     else:
         updates = request.json
-        # جلب أحدث صف للمعاملة
-        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
-        if not row_info:
+        # جلب أحدث صف للمعاملة (لأخذ البيانات القديمة)
+        old_data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
+        if not old_data:
             return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
-        old_data = row_info['data']
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        # إنشاء صف جديد
+        # إنشاء صف جديد يحتوي على جميع البيانات القديمة + التحديثات
         new_row = [''] * len(headers)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now()
@@ -823,11 +827,10 @@ def api_transaction(id):
 
         ws.append_row(new_row)
 
-        # تسجيل التغيير في history
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # بناء رسالة الإشعار للمستخدم
+        # بناء رسالة إشعار للمستخدم
         user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
@@ -901,8 +904,8 @@ def verify_email_page():
     if not transaction_id:
         return "❌ المعاملة غير معروفة", 400
 
-    row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, transaction_id)
-    if not row_info:
+    data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
+    if not data:
         return "❌ المعاملة غير موجودة", 404
 
     if request.method == 'POST':
@@ -1553,11 +1556,9 @@ def view_transaction_page(id):
         if not sheets_client:
             return "⚠️ النظام غير متصل بقاعدة البيانات", 500
 
-        row_info = sheets_client.get_latest_row_by_id(Config.SHEET_MANAGER, id)
-        if not row_info:
+        data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
+        if not data:
             return f"❌ المعاملة {id} غير موجودة", 404
-
-        data = row_info['data']
 
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         history = []
