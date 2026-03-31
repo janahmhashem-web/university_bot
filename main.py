@@ -34,8 +34,10 @@ if missing_vars:
 else:
     logging.info("✅ جميع المتغيرات البيئية الأساسية موجودة")
 
-creds_preview = os.getenv('GOOGLE_CREDENTIALS_JSON', '')[:100]
-logging.info(f"GOOGLE_CREDENTIALS_JSON (بداية): {creds_preview}...")
+# تأكد من أن WEB_APP_URL لا يحتوي على / في النهاية
+web_app_url = os.getenv('WEB_APP_URL', '').rstrip('/')
+os.environ['WEB_APP_URL'] = web_app_url
+logging.info(f"WEB_APP_URL المستخدمة: {web_app_url}")
 
 # ------------------ إعداد التسجيل ------------------
 logging.basicConfig(
@@ -70,12 +72,8 @@ except Exception as e:
 if sheets_client:
     ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
     if ws:
-        records = ws.get_all_records()
-        logger.info(f"📊 عدد المعاملات الحالي في ورقة manager: {len(records)}")
-        if len(records) > 0:
-            logger.info(f"📊 مثال على أول معاملة: {records[0]}")
-        else:
-            logger.info("الورقة manager فارغة")
+        records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
+        logger.info(f"📊 عدد المعاملات الفريدة في ورقة manager: {len(records)}")
     else:
         logger.error("❌ الورقة manager غير موجودة")
 
@@ -282,7 +280,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not sheets_client:
             await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
             return
-        records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
+        records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
         total = len(records)
         completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
         pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
@@ -350,7 +348,7 @@ async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         if context.args:
             keyword = ' '.join(context.args)
-            records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
+            records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
             found = []
             for r in records:
                 if keyword in str(r.values()):
@@ -377,7 +375,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not sheets_client:
             await update.message.reply_text("⚠️ غير متصل بقاعدة البيانات.")
             return
-        records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
+        records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
         total = len(records)
         completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
         pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
@@ -712,15 +710,12 @@ def api_submit():
         if all_rows:
             logger.info(f"📊 آخر صف مضاف: {all_rows[-1]}")
 
-        # ورقة QR (الأعمدة الجديدة)
+        # ورقة QR
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             verify_link = f"{Config.WEB_APP_URL}/verify-email?transaction_id={transaction_id}"
             qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
-            qr_ws.append_row([transaction_id, '', ''])  # placeholder
-            new_row_num = len(qr_ws.get_all_values())
-            qr_ws.update_cell(new_row_num, 2, f'=IMAGE("{qr_image_url}")')
-            qr_ws.update_cell(new_row_num, 3, f'=HYPERLINK("{verify_link}", "فتح صفحة التحقق")')
+            qr_ws.append_row([transaction_id, f'=IMAGE("{qr_image_url}")', f'=HYPERLINK("{verify_link}", "فتح صفحة التحقق")'])
             logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR")
 
         sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
@@ -888,7 +883,7 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحة التحقق بالبريد (المسار المفقود) ------------------
+# ------------------ صفحة التحقق بالبريد ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
 def verify_email_page():
     transaction_id = request.args.get('transaction_id')
@@ -1169,7 +1164,8 @@ EDIT_HTML = """
 def edit_transaction_page(id):
     token = request.args.get('token')
     if not token:
-        abort(403, description="مطلوب رمز وصول صالح لتعديل المعاملة.")
+        # إعادة توجيه إلى صفحة التحقق من البريد
+        return redirect(url_for('verify_email_page', transaction_id=id))
     if not sheets_client or not sheets_client.verify_access_token(token, id):
         abort(403, description="رمز الوصول غير صالح أو منتهي الصلاحية.")
     return render_template_string(EDIT_HTML)
@@ -1215,7 +1211,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                  </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1473,18 +1469,14 @@ def verify_page():
     if not sheets_client:
         return "<html dir='rtl'><body><h2>⚠️ النظام غير متصل بقاعدة البيانات</h2></body></html>"
 
-    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-    if not ws:
-        return "<html dir='rtl'><body><h2>⚠️ ورقة manager غير موجودة</h2></body></html>"
-
-    records = ws.get_all_records()
+    records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
     found = False
     transaction_id = None
 
     name_clean = name.strip().lower()
     phone_clean = phone.strip()
 
-    for idx, row in enumerate(records):
+    for row in records:
         row_name = str(row.get('اسم صاحب المعاملة الثلاثي', '')).strip().lower()
         row_phone = str(row.get('رقم الهاتف', '')).strip()
         if row_name == name_clean and row_phone == phone_clean:
@@ -1699,14 +1691,17 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
         if transaction_id and customer_email:
             qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-            from email_service import EmailService
-            success = EmailService.send_customer_email(
-                customer_email, customer_name, transaction_id, qr_page_link
-            )
-            if success:
-                logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
-            else:
-                logger.error(f"❌ فشل إرسال الإيميل للمعاملة {transaction_id}")
+            try:
+                from email_service import EmailService
+                success = EmailService.send_customer_email(
+                    customer_email, customer_name, transaction_id, qr_page_link
+                )
+                if success:
+                    logger.info(f"📧 تم إرسال إيميل للمعاملة {transaction_id}")
+                else:
+                    logger.error(f"❌ فشل إرسال الإيميل للمعاملة {transaction_id}")
+            except Exception as e:
+                logger.error(f"خطأ في إرسال الإيميل: {e}")
 
         history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
         if history_ws:
@@ -1752,7 +1747,8 @@ def check_new_transactions():
 # ------------------ جدولة المهام ------------------
 if sheets_client:
     try:
-        last_row_count = len(sheets_client.get_all_records(Config.SHEET_MANAGER))
+        # استخدم الدالة السريعة للحصول على العدد الفريد
+        last_row_count = len(sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER))
     except Exception as e:
         logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
         last_row_count = 0
@@ -1761,11 +1757,11 @@ if sheets_client:
     scheduler.start()
     scheduler.add_job(
         func=check_new_transactions,
-        trigger=IntervalTrigger(seconds=10),
+        trigger=IntervalTrigger(seconds=30),  # تقليل التكرار لتجنب 429
         id='check_transactions',
         replace_existing=True
     )
-    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 10 ثوانٍ)")
+    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 30 ثانية)")
     atexit.register(lambda: scheduler.shutdown())
     atexit.register(lambda: executor.shutdown(wait=False))
 
