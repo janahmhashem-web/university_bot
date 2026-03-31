@@ -66,22 +66,8 @@ except Exception as e:
     logger.error(f"❌ فشل تهيئة Groq AI: {e}")
     ai_assistant = None
 
-# ------------------ فحص ورقة manager عند بدء التشغيل ------------------
-if sheets_client:
-    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-    if ws:
-        records = ws.get_all_records()
-        logger.info(f"📊 عدد المعاملات الحالي في ورقة manager: {len(records)}")
-        if len(records) > 0:
-            logger.info(f"📊 مثال على أول معاملة: {records[0]}")
-        else:
-            logger.info("الورقة manager فارغة")
-    else:
-        logger.error("❌ الورقة manager غير موجودة")
-
 # ------------------ دوال مساعدة عامة ------------------
 async def notify_user(transaction_id, message):
-    """إرسال إشعار للمستخدم المرتبط بالمعاملة عبر البوت"""
     if not sheets_client or not bot_app or not background_loop:
         return
     try:
@@ -103,7 +89,6 @@ async def notify_user(transaction_id, message):
         logger.error(f"فشل إرسال إشعار للمستخدم: {e}")
 
 def save_user_chat(transaction_id, chat_id):
-    """حفظ chat_id في ورقة users"""
     try:
         ws = sheets_client.get_worksheet(Config.SHEET_USERS)
         if not ws:
@@ -783,6 +768,7 @@ def api_transactions():
     } for r in records]
     return jsonify(result)
 
+# ================== النقطة الأهم: تعديل المعاملة (إضافة صف جديد) ==================
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
     if not sheets_client:
@@ -799,9 +785,11 @@ def api_transaction(id):
         old_data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
         if not old_data:
             return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
+
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
+        # إنشاء صف جديد
         new_row = [''] * len(headers)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now()
@@ -823,11 +811,13 @@ def api_transaction(id):
                 value = current_count + 1
             new_row[idx] = value
 
+        # إضافة الصف الجديد (وليس تحديث الصف القديم)
         ws.append_row(new_row)
 
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
+        # بناء رسالة الإشعار للمستخدم
         user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
@@ -865,6 +855,7 @@ def api_transaction(id):
                 background_loop
             )
 
+        # أرشفة إذا أصبحت مكتملة
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
                 archive_success = sheets_client.archive_transaction(id)
@@ -1207,7 +1198,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-            </table>
+             </table>
         </div>
     </div>
     <script>
@@ -1220,7 +1211,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                </tr>`;
+                 </tr>`;
                 tbody.innerHTML += row;
             });
         });

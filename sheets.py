@@ -101,6 +101,7 @@ class GoogleSheetsClient:
             return ws.get_all_records()
         return []
 
+    # ================== الدوال السريعة ==================
     def get_latest_transactions_fast(self, sheet_name):
         """إرجاع أحدث نسخة لكل معاملة (سريع باستخدام get_all_values)"""
         ws = self.get_worksheet(sheet_name)
@@ -115,11 +116,10 @@ class GoogleSheetsClient:
         for row in rows:
             row_dict = dict(zip(headers, row))
             transaction_id = str(row_dict.get("ID"))
-            latest[transaction_id] = row_dict  # آخر صف (لأنه يتكرر من الأعلى إلى الأسفل)
+            latest[transaction_id] = row_dict
         return list(latest.values())
 
     def get_latest_transactions_sorted_fast(self, sheet_name):
-        """أحدث المعاملات مرتبة حسب آخر تعديل (الأحدث أولاً)"""
         data = self.get_latest_transactions_fast(sheet_name)
         def parse_date(row):
             try:
@@ -129,7 +129,6 @@ class GoogleSheetsClient:
         return sorted(data, key=parse_date, reverse=True)
 
     def filter_transactions(self, sheet_name, status=None, employee=None, department=None):
-        """فلترة حسب الحالة، الموظف، القسم"""
         data = self.get_latest_transactions_fast(sheet_name)
         results = []
         for row in data:
@@ -143,31 +142,13 @@ class GoogleSheetsClient:
         return results
 
     def get_latest_row_by_id_fast(self, sheet_name, transaction_id):
-        """جلب أحدث صف لمعاملة معينة (سريع)"""
         data = self.get_latest_transactions_fast(sheet_name)
         for row in data:
             if str(row.get("ID")) == str(transaction_id):
                 return row
         return None
 
-    # الدوال القديمة للتوافق
-    def get_latest_row_by_id(self, sheet_name, transaction_id):
-        data = self.get_latest_transactions_fast(sheet_name)
-        for row in data:
-            if str(row.get("ID")) == str(transaction_id):
-                return {'row': None, 'data': row}  # row غير مستخدم في الكود الجديد
-        return None
-
-    def get_row_by_id(self, sheet_name, transaction_id):
-        ws = self.get_worksheet(sheet_name)
-        if not ws:
-            return None
-        records = ws.get_all_records()
-        for idx, row in enumerate(records):
-            if str(row.get('ID')) == str(transaction_id):
-                return {'row': idx + 2, 'data': row}
-        return None
-
+    # ================== الدوال الأساسية ==================
     def add_history_entry(self, transaction_id, action, user="النظام"):
         try:
             ws = self.get_worksheet('history')
@@ -177,11 +158,6 @@ class GoogleSheetsClient:
                 ws.append_row([timestamp, transaction_id, action, user])
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
-
-    def update_cell(self, sheet_name, row, col, value):
-        ws = self.get_worksheet(sheet_name)
-        if ws:
-            ws.update_cell(row, col, value)
 
     def generate_access_token(self, transaction_id, email, expiry_minutes=60):
         try:
@@ -235,7 +211,6 @@ class GoogleSheetsClient:
             latest_data = self.get_latest_row_by_id_fast('manager', transaction_id)
             if not latest_data:
                 return False
-            # إضافة تاريخ الأرشفة
             archive_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             latest_data['تاريخ_الأرشفة'] = archive_time
 
@@ -258,7 +233,6 @@ class GoogleSheetsClient:
                         hist['تاريخ_الأرشفة'] = archive_time
                         arch_row = [hist.get(header, '') for header in arch_headers]
                         ws_archive_history.append_row(arch_row)
-                    # حذف من history
                     rows_to_delete = []
                     for i, r in enumerate(records):
                         if str(r.get('ID')) == str(transaction_id):
