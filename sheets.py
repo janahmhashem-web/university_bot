@@ -26,7 +26,7 @@ class GoogleSheetsClient:
             from config import Config
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
             logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
-            # تأخير عشوائي لتوزيع الطلبات بين العمال
+            # تأخير عشوائي لتجنب تداخل الطلبات بين العمال
             time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
@@ -62,7 +62,7 @@ class GoogleSheetsClient:
         }
 
         for sheet_name, required_headers in sheets_required.items():
-            for attempt in range(3):  # إعادة المحاولة 3 مرات
+            for attempt in range(3):
                 try:
                     ws = self.get_worksheet(sheet_name)
                     if ws is None:
@@ -70,18 +70,18 @@ class GoogleSheetsClient:
                         for col, header in enumerate(required_headers, 1):
                             ws.update_cell(1, col, header)
                         logger.info(f"✅ تم إنشاء الورقة '{sheet_name}' مع الأعمدة المطلوبة")
-                        break  # نجحنا، نخرج من حلقة إعادة المحاولة
+                        break
                     else:
                         existing_headers = ws.row_values(1)
-                        # تحديث الأعمدة المفقودة فقط
+                        # إضافة الأعمدة المفقودة فقط
                         for col, header in enumerate(required_headers, 1):
                             if header not in existing_headers:
                                 ws.update_cell(1, col, header)
                                 logger.info(f"✅ تم إضافة العمود '{header}' إلى الورقة '{sheet_name}'")
-                        break  # نجحنا
+                        break
                 except gspread.exceptions.APIError as e:
                     if e.response.status_code == 429:
-                        wait = (2 ** attempt) + random.uniform(0, 1)  # تأخير تصاعدي
+                        wait = (2 ** attempt) + random.uniform(0, 1)
                         logger.warning(f"⚠️ تجاوز الحصة (429) للورقة {sheet_name}، إعادة المحاولة بعد {wait:.2f} ثانية...")
                         time.sleep(wait)
                     else:
@@ -90,28 +90,6 @@ class GoogleSheetsClient:
                 except Exception as e:
                     logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
                     break
-    def remove_filter(self, sheet_name):
-        """محاولة إزالة أي فلتر من الورقة باستخدام Sheets API."""
-        try:
-            sheet = self.get_worksheet(sheet_name)
-            if not sheet:
-                return
-            sheet_id = sheet._properties['sheetId']
-            from googleapiclient.discovery import build
-            sheets_service = build('sheets', 'v4', credentials=self.client.auth)
-            requests = [{
-                "clearBasicFilter": {
-                    "sheetId": sheet_id
-                }
-            }]
-            body = {"requests": requests}
-            sheets_service.spreadsheets().batchUpdate(
-                spreadsheetId=self.spreadsheet.id,
-                body=body
-            ).execute()
-            logger.info(f"✅ تم إزالة الفلتر من الورقة {sheet_name}")
-        except Exception as e:
-            logger.warning(f"⚠️ فشل إزالة الفلتر (ليس بالضرورة خطأ): {e}")
 
     def get_worksheet(self, sheet_name):
         try:
