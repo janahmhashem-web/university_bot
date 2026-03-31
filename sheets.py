@@ -8,6 +8,8 @@ from googleapiclient.http import MediaFileUpload
 from datetime import datetime, timedelta
 import uuid
 import tempfile
+import time
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -17,39 +19,19 @@ class GoogleSheetsClient:
             scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
             creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
             if not creds_json:
-                raise ValueError("GOOGLE_CREDENTIALS_JSON environment variable is not set")
-
-            try:
-                creds_dict = json.loads(creds_json)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"Invalid JSON in GOOGLE_CREDENTIALS_JSON: {e}")
-
-            required_keys = ['private_key', 'client_email']
-            for key in required_keys:
-                if key not in creds_dict:
-                    raise ValueError(f"Missing '{key}' in credentials JSON")
-
+                raise ValueError("GOOGLE_CREDENTIALS_JSON not set")
+            creds_dict = json.loads(creds_json)
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             self.client = gspread.authorize(creds)
-
             from config import Config
-            if not Config.SPREADSHEET_ID:
-                raise ValueError("SPREADSHEET_ID is not set in config")
-
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
             logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
-
+            # تأخير عشوائي لتوزيع الطلبات بين العمال
+            time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
-
-            # محاولة إزالة الفلتر من ورقة manager
-            try:
-                self.remove_filter(Config.SHEET_MANAGER)
-            except Exception as e:
-                logger.warning(f"تعذر إزالة الفلتر: {e}")
-
         except Exception as e:
-            logger.error(f"❌ فشل الاتصال بـ Google Sheets: {str(e)}", exc_info=True)
+            logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
     def _init_sheets(self):
@@ -80,22 +62,34 @@ class GoogleSheetsClient:
         }
 
         for sheet_name, required_headers in sheets_required.items():
-            try:
-                ws = self.get_worksheet(sheet_name)
-                if ws is None:
-                    ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(required_headers))
-                    for col, header in enumerate(required_headers, 1):
-                        ws.update_cell(1, col, header)
-                    logger.info(f"✅ تم إنشاء الورقة '{sheet_name}' مع الأعمدة المطلوبة")
-                else:
-                    existing_headers = ws.row_values(1)
-                    for col, header in enumerate(required_headers, 1):
-                        if header not in existing_headers:
+            for attempt in range(3):  # إعادة المحاولة 3 مرات
+                try:
+                    ws = self.get_worksheet(sheet_name)
+                    if ws is None:
+                        ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(required_headers))
+                        for col, header in enumerate(required_headers, 1):
                             ws.update_cell(1, col, header)
-                            logger.info(f"✅ تم إضافة العمود '{header}' إلى الورقة '{sheet_name}'")
-            except Exception as e:
-                logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
-
+                        logger.info(f"✅ تم إنشاء الورقة '{sheet_name}' مع الأعمدة المطلوبة")
+                        break  # نجحنا، نخرج من حلقة إعادة المحاولة
+                    else:
+                        existing_headers = ws.row_values(1)
+                        # تحديث الأعمدة المفقودة فقط
+                        for col, header in enumerate(required_headers, 1):
+                            if header not in existing_headers:
+                                ws.update_cell(1, col, header)
+                                logger.info(f"✅ تم إضافة العمود '{header}' إلى الورقة '{sheet_name}'")
+                        break  # نجحنا
+                except gspread.exceptions.APIError as e:
+                    if e.response.status_code == 429:
+                        wait = (2 ** attempt) + random.uniform(0, 1)  # تأخير تصاعدي
+                        logger.warning(f"⚠️ تجاوز الحصة (429) للورقة {sheet_name}، إعادة المحاولة بعد {wait:.2f} ثانية...")
+                        time.sleep(wait)
+                    else:
+                        logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
+                        break
+                except Exception as e:
+                    logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
+                    break
     def remove_filter(self, sheet_name):
         """محاولة إزالة أي فلتر من الورقة باستخدام Sheets API."""
         try:
