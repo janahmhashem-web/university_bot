@@ -1323,11 +1323,11 @@ def register_transaction():
                     <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
+                            <input type="text" id="name" name="name" required placeholder>
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
+                            <input type="text" id="phone" name="phone" required placeholder=>
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
