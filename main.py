@@ -83,7 +83,8 @@ if sheets_client:
         logger.error("❌ الورقة manager غير موجودة")
 
 # ------------------ دوال مساعدة عامة ------------------
-async def notify_user(transaction_id, message):
+async def notify_user(transaction_id, message, changed_fields=None):
+    """إرسال إشعار للمستخدم مع زر لعرض السجل"""
     if not sheets_client or not bot_app or not background_loop:
         return
     try:
@@ -95,10 +96,14 @@ async def notify_user(transaction_id, message):
             if str(row.get('transaction_id')) == str(transaction_id):
                 chat_id = row.get('chat_id')
                 if chat_id:
+                    # إضافة زر لعرض السجل
+                    keyboard = [[InlineKeyboardButton("📜 عرض سجل التغييرات", callback_data=f"history_{transaction_id}")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
                     await bot_app.bot.send_message(
                         chat_id=int(chat_id),
                         text=message,
-                        parse_mode='Markdown'
+                        parse_mode='Markdown',
+                        reply_markup=reply_markup
                     )
                 break
     except Exception as e:
@@ -190,12 +195,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("🔍 تفاصيل معاملة", callback_data="cmd_id")],
         [InlineKeyboardButton("📜 سجل تتبع معاملة", callback_data="cmd_history")],
+        [InlineKeyboardButton("🔎 بحث عن معاملة", callback_data="cmd_search")],
         [InlineKeyboardButton("📱 تعليمات QR", callback_data="cmd_qr")],
-        [InlineKeyboardButton("💬 التواصل مع الدعم", callback_data="cmd_support")],
         [InlineKeyboardButton("📊 تحليل معاملة", callback_data="cmd_analyze")],
+        [InlineKeyboardButton("💬 التواصل مع الدعم", callback_data="cmd_support")],
     ]
     if is_admin:
-        keyboard.append([InlineKeyboardButton("📊 إحصائيات", callback_data="cmd_stats")])
+        keyboard.append([InlineKeyboardButton("📈 إحصائيات", callback_data="cmd_stats")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     msg = "👋 *اهلاً بك في بوت متابعة المعاملات*\n\n"
@@ -203,30 +209,47 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin:
         msg += "\n👑 *أنت مدير*\nيمكنك طلب أي شيء مثل: قائمة المعاملات، إحصائيات، تحليل معاملة، إلخ."
     else:
-        msg += "\n📌 *ملاحظة:* للحصول على معلومات التتبع، يجب إدخال رقم المعاملة (ID) باستخدام الأمر `/id` أو عبر الأزرار."
+        msg += "\n📌 *ملاحظة:* بعد اختيار الخدمة، سيُطلب منك إدخال رقم المعاملة (ID) أو كلمة البحث."
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    logger.info(f"🔘 تم الضغط على زر: {query.data}")
     await query.answer()
     data = query.data
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
 
     if data == "cmd_id":
+        # طلب إدخال رقم المعاملة
+        context.user_data['awaiting'] = 'id'
         await query.edit_message_text(
             "📌 أرسل رقم المعاملة (ID) لمعرفة تفاصيلها.\n\n"
-            "مثال: `/id MUT-20260324123456-1234`",
+            "مثال: `MUT-20260324123456-1234`",
             parse_mode='Markdown'
         )
     elif data == "cmd_history":
+        context.user_data['awaiting'] = 'history'
         await query.edit_message_text(
             "📌 أرسل رقم المعاملة (ID) لمعرفة سجل تتبعها.\n\n"
-            "مثال: `/history MUT-20260324123456-1234`",
+            "مثال: `MUT-20260324123456-1234`",
+            parse_mode='Markdown'
+        )
+    elif data == "cmd_search":
+        context.user_data['awaiting'] = 'search'
+        await query.edit_message_text(
+            "🔎 أدخل كلمة البحث (مثل: اسم، قسم، أو رقم معاملة):",
+            parse_mode='Markdown'
+        )
+    elif data == "cmd_analyze":
+        context.user_data['awaiting'] = 'analyze'
+        await query.edit_message_text(
+            "📊 أرسل رقم المعاملة (ID) لتحليلها.\n\n"
+            "مثال: `MUT-20260324123456-1234`",
             parse_mode='Markdown'
         )
     elif data == "cmd_qr":
-        user_id = update.effective_user.id
         transaction_id = None
-
         if sheets_client:
             try:
                 ws = sheets_client.get_worksheet(Config.SHEET_USERS)
@@ -248,10 +271,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if transaction_id:
-            # بناء الرابط بدون بروتوكول (للبوت، نستخدم Config.WEB_APP_URL)
             domain = get_domain_from_url(Config.WEB_APP_URL)
             verify_link = f"{domain}/verify-email?transaction_id={transaction_id}"
-            qr_base64 = QRGenerator.generate_qr(f"https://{verify_link}")  # الرابط كامل مع https للبوت
+            qr_base64 = QRGenerator.generate_qr(f"https://{verify_link}")
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=base64.b64decode(qr_base64),
@@ -273,14 +295,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "سنتواصل معك في أقرب وقت.",
             parse_mode='Markdown'
         )
-    elif data == "cmd_analyze":
-        await query.edit_message_text(
-            "📊 أرسل رقم المعاملة (ID) لتحليلها.\n\n"
-            "مثال: `/analyze MUT-20260324123456-1234`",
-            parse_mode='Markdown'
-        )
     elif data == "cmd_stats":
-        user_id = update.effective_user.id
         if user_id != Config.ADMIN_CHAT_ID:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
@@ -293,6 +308,31 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
         msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
         await query.edit_message_text(msg, parse_mode='Markdown')
+    elif data.startswith("history_"):
+        transaction_id = data.split("_", 1)[1]
+        # عرض سجل التتبع
+        if not sheets_client:
+            await query.edit_message_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+            return
+        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+        if not ws:
+            await query.edit_message_text("❌ لا يوجد سجل تاريخ.")
+            return
+        records = ws.get_all_records()
+        history = [r for r in records if str(r.get('ID')) == transaction_id]
+        if history:
+            history.sort(key=lambda x: x.get('timestamp', ''))
+            msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n"
+            for entry in history:
+                time_str = entry.get('timestamp', '')
+                action = entry.get('action', '')
+                user = entry.get('user', '')
+                msg += f"• {time_str} - {action} (بواسطة: {user})\n"
+            await query.edit_message_text(msg, parse_mode='Markdown')
+        else:
+            await query.edit_message_text(f"لا يوجد سجل للمعاملة {transaction_id}")
+    else:
+        await query.edit_message_text("⚠️ أمر غير معروف.")
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -308,7 +348,6 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
                     if key in data and data[key]:
                         msg += f"• {key}: {data[key]}\n"
-                # نستخدم domain بدون بروتوكول للرابط في الرسالة
                 domain = get_domain_from_url(Config.WEB_APP_URL)
                 msg += f"\n🔗 [رابط المتابعة](https://{domain}/view/{transaction_id})"
                 await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
@@ -472,27 +511,27 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    logger.info(f"🧠 معالجة رسالة عادية: {text}")
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
 
-    if text.isdigit() or (text.startswith('MUT-') and len(text) > 10):
-        context.args = [text]
-        await get_id(update, context)
+    # التحقق من وجود حالة معلقة (منتظر إدخال)
+    if 'awaiting' in context.user_data:
+        awaiting = context.user_data.pop('awaiting')
+        if awaiting == 'id':
+            context.args = [text]
+            await get_id(update, context)
+        elif awaiting == 'history':
+            context.args = [text]
+            await get_history(update, context)
+        elif awaiting == 'search':
+            context.args = [text]
+            await search(update, context)
+        elif awaiting == 'analyze':
+            context.args = [text]
+            await analyze(update, context)
         return
 
-    if text.startswith(('بحث', 'ابحث')):
-        keyword = text.replace('بحث', '').replace('ابحث', '').strip()
-        if keyword:
-            context.args = [keyword]
-            await search(update, context)
-            return
-
-    if text.startswith(('تاريخ', 'تتبع')):
-        parts = text.split()
-        if len(parts) > 1 and (parts[1].isdigit() or parts[1].startswith('MUT-')):
-            context.args = [parts[1]]
-            await get_history(update, context)
-            return
-
+    # إذا لم تكن هناك حالة معلقة، معالجة كرسالة عادية (ذكاء اصطناعي)
     await ai_chat_handler(update, context)
 
 async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -602,11 +641,17 @@ def webhook():
     try:
         logger.info("📩 تم استقبال طلب webhook")
         json_str = request.get_data(as_text=True)
+        logger.info(f"📦 محتوى webhook: {json_str[:200]}")
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
+        # معالجة التحديث في حلقة الخلفية
+        future = asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
+        try:
+            future.result(timeout=5)
+        except Exception as e:
+            logger.error(f"❌ خطأ في معالجة التحديث: {e}", exc_info=True)
         return "OK"
     except Exception as e:
-        logger.error(f"خطأ في webhook: {e}")
+        logger.error(f"❌ خطأ في webhook: {e}", exc_info=True)
         return "Error", 500
 
 def set_webhook_sync():
@@ -692,11 +737,8 @@ def api_submit():
 
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
-        
-        # بناء الرابط بدون بروتوكول للصف الجديد (سيتم كتابته في العمود "الرابط")
-        domain = request.host  # مثل: universitybot-production.up.railway.app
+        domain = request.host
         edit_link = f"{domain}/transaction/{transaction_id}"
-        
         for idx, header in enumerate(headers):
             if header == 'Timestamp':
                 new_row[idx] = timestamp
@@ -724,17 +766,13 @@ def api_submit():
         if all_rows:
             logger.info(f"📊 آخر صف مضاف: {all_rows[-1]}")
 
-        # ورقة QR - إصلاح الصيغ
+        # ورقة QR
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             verify_link = f"{domain}/verify-email?transaction_id={transaction_id}"
             qr_image_url = f"{domain}/qr_image/{transaction_id}"
-
-            # إضافة صف بالقيم الأساسية
             qr_ws.append_row([transaction_id, "", ""])
             new_row_num = len(qr_ws.get_all_values())
-
-            # تحديث الخلايا بالصيغ (بدون بروتوكول)
             qr_ws.update_cell(new_row_num, 2, f'=IMAGE("{qr_image_url}")')
             qr_ws.update_cell(new_row_num, 3, f'=HYPERLINK("{verify_link}", "فتح صفحة التحقق")')
             logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR مع صيغ")
@@ -751,7 +789,6 @@ def api_submit():
                 background_loop
             )
 
-        # للرد على API، نرسل رابط كامل بـ https
         full_view_link = f"https://{domain}/view/{transaction_id}"
         return jsonify({
             'success': True,
@@ -838,46 +875,50 @@ def api_transaction(id):
 
         ws.append_row(new_row)
 
-        changes = ', '.join(updates.keys())
-        sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
+        # إنشاء رسالة مفصلة بالتغييرات
+        changes = []
+        change_messages = {
+            'الحالة': lambda new, old: f"📌 تم تغيير الحالة من '{old}' إلى '{new}'",
+            'المؤسسة التالية': lambda new, old: f"🏢 تم نقل المعاملة إلى مؤسسة '{new}'",
+            'الموظف المسؤول': lambda new, old: f"👤 تم تعيين '{new}' مسؤولاً عن المعاملة",
+            'التأخير': lambda new, old: f"⚠️ تم تغيير حالة التأخير إلى '{new}'",
+            'الأولوية': lambda new, old: f"⚡ الأولوية تغيرت إلى '{new}'",
+            'تاريخ التحويل': lambda new, old: f"📅 تم تحديث تاريخ التحويل إلى '{new}'",
+            'سبب التحويل': lambda new, old: f"📝 تم تحديث سبب التحويل",
+            'الموافق': lambda new, old: f"✅ تمت الموافقة من قبل '{new}'",
+            'ملاحظات إضافية': lambda new, old: f"💬 تم إضافة ملاحظات جديدة",
+            'آخر إجراء': lambda new, old: f"🔄 آخر إجراء: {new}",
+        }
 
-        user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
-            if key == 'الحالة' and new_value != old_value:
-                user_message += f"📌 تم تغيير الحالة إلى *{new_value}*\n"
-            elif key == 'المؤسسة التالية' and new_value != old_value:
-                user_message += f"🏢 تم نقل المعاملة إلى مؤسسة *{new_value}*\n"
-            elif key == 'الموظف المسؤول' and new_value != old_value:
-                user_message += f"👤 تم تعيين *{new_value}* مسؤولاً عن المعاملة\n"
-            elif key == 'التأخير':
-                if new_value == 'نعم' and old_value != 'نعم':
-                    user_message += f"⚠️ *المعاملة متأخرة!* يرجى المتابعة.\n"
-                elif new_value == 'لا' and old_value != 'لا':
-                    user_message += f"✅ تم حل التأخير\n"
-            elif key == 'الأولوية' and new_value != old_value:
-                user_message += f"⚡ الأولوية تغيرت إلى *{new_value}*\n"
-            elif key == 'تاريخ التحويل' and new_value != old_value:
-                user_message += f"📅 تم تحديث تاريخ التحويل إلى *{new_value}*\n"
-            elif key == 'سبب التحويل' and new_value != old_value:
-                user_message += f"📝 تم تحديث سبب التحويل\n"
-            elif key == 'الموافق' and new_value != old_value:
-                user_message += f"✅ تمت الموافقة من قبل *{new_value}*\n"
-            elif key == 'ملاحظات إضافية' and new_value != old_value:
-                user_message += f"💬 تم إضافة ملاحظات جديدة\n"
-            elif key == 'آخر إجراء' and new_value != old_value:
-                user_message += f"🔄 آخر إجراء: {new_value}\n"
+            if new_value != old_value:
+                if key in change_messages:
+                    changes.append(change_messages[key](new_value, old_value))
+                else:
+                    # رسالة عامة لأي حقل آخر
+                    changes.append(f"📝 تم تحديث {key} إلى '{new_value}'")
 
-        if user_message == f"✏️ *معاملتك {id} تم تحديثها*\n\n":
+        user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
+        if changes:
+            user_message += "\n".join(changes)
+        else:
             user_message += "تم تحديث بيانات المعاملة.\n"
-        user_message += f"\n🔍 لمتابعة كل التغييرات: `/history {id}`"
 
+        user_message += f"\n🔍 لمتابعة كل التغييرات اضغط الزر أدناه."
+
+        # إضافة سجل في history
+        changes_str = ', '.join(updates.keys())
+        sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes_str}", employee_name)
+
+        # إرسال الإشعار
         if background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
                 notify_user(id, user_message),
                 background_loop
             )
 
+        # أرشفة المعاملة إذا أصبحت مكتملة
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
                 archive_success = sheets_client.archive_transaction(id)
@@ -928,7 +969,6 @@ def verify_email_page():
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
 
-        # بناء الرابط بدون بروتوكول للتوجيه
         domain = request.host
         edit_url = f"https://{domain}/transaction/{transaction_id}?token={token}"
         logger.info(f"✅ إعادة التوجيه إلى: {edit_url}")
@@ -1190,7 +1230,6 @@ EDIT_HTML = """
 def edit_transaction_page(id):
     token = request.args.get('token')
     if not token:
-        # إعادة توجيه إلى صفحة التحقق
         return redirect(f"/verify-email?transaction_id={id}")
     if not sheets_client or not sheets_client.verify_access_token(token, id):
         abort(403, description="رمز الوصول غير صالح أو منتهي الصلاحية.")
@@ -1224,7 +1263,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+              </table>
         </div>
     </div>
     <script>
@@ -1707,7 +1746,6 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
                 ws.update_cell(row_number, 8, transaction_id)
             logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
 
-        # بناء الرابط بدون بروتوكول (نستخدم Config.WEB_APP_URL لاستخراج النطاق)
         domain = get_domain_from_url(Config.WEB_APP_URL)
         view_link = f"{domain}/view/{transaction_id}"
         hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
