@@ -34,11 +34,6 @@ if missing_vars:
 else:
     logging.info("✅ جميع المتغيرات البيئية الأساسية موجودة")
 
-# تأكد من أن WEB_APP_URL لا يحتوي على / في النهاية
-web_app_url = os.getenv('WEB_APP_URL', '').rstrip('/')
-os.environ['WEB_APP_URL'] = web_app_url
-logging.info(f"WEB_APP_URL المستخدمة: {web_app_url}")
-
 # ------------------ إعداد التسجيل ------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -46,6 +41,22 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+# ------------------ إعداد Flask مع SERVER_NAME ------------------
+app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
+
+# تعيين SERVER_NAME من WEB_APP_URL (استخراج النطاق فقط)
+web_app_url = os.getenv('WEB_APP_URL', '').rstrip('/')
+if web_app_url.startswith('https://'):
+    server_name = web_app_url.replace('https://', '')
+elif web_app_url.startswith('http://'):
+    server_name = web_app_url.replace('http://', '')
+else:
+    server_name = web_app_url
+app.config['SERVER_NAME'] = server_name
+app.config['PREFERRED_URL_SCHEME'] = 'https'
+logger.info(f"✅ تم تعيين SERVER_NAME = {server_name}")
 
 # ------------------ Google Sheets ------------------
 sheets_client = None
@@ -55,9 +66,6 @@ try:
 except Exception as e:
     logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
     sheets_client = None
-
-app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 
 # ------------------ الذكاء الاصطناعي ------------------
 ai_assistant = None
@@ -243,7 +251,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if transaction_id:
-            verify_link = f"{Config.WEB_APP_URL}/verify-email?transaction_id={transaction_id}"
+            verify_link = url_for('verify_email_page', transaction_id=transaction_id, _external=True)
             qr_base64 = QRGenerator.generate_qr(verify_link)
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
@@ -301,7 +309,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
                     if key in data and data[key]:
                         msg += f"• {key}: {data[key]}\n"
-                msg += f"\n🔗 [رابط المتابعة]({Config.WEB_APP_URL}/view/{transaction_id})"
+                msg += f"\n🔗 [رابط المتابعة]({url_for('view_transaction_page', id=transaction_id, _external=True)})"
                 await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
             else:
                 await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
@@ -401,7 +409,7 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"خطأ في جلب معاملة المستخدم: {e}")
 
     if transaction_id:
-        verify_link = f"{Config.WEB_APP_URL}/verify-email?transaction_id={transaction_id}"
+        verify_link = url_for('verify_email_page', transaction_id=transaction_id, _external=True)
         qr_base64 = QRGenerator.generate_qr(verify_link)
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
@@ -682,7 +690,7 @@ def api_submit():
 
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
-        edit_link = f"{Config.WEB_APP_URL}/transaction/{transaction_id}"
+        edit_link = url_for('edit_transaction_page', id=transaction_id, _external=True)
         for idx, header in enumerate(headers):
             if header == 'Timestamp':
                 new_row[idx] = timestamp
@@ -713,8 +721,8 @@ def api_submit():
         # ورقة QR
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
-            verify_link = f"{Config.WEB_APP_URL}/verify-email?transaction_id={transaction_id}"
-            qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
+            verify_link = url_for('verify_email_page', transaction_id=transaction_id, _external=True)
+            qr_image_url = url_for('qr_image', id=transaction_id, _external=True)
             qr_ws.append_row([transaction_id, f'=IMAGE("{qr_image_url}")', f'=HYPERLINK("{verify_link}", "فتح صفحة التحقق")'])
             logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR")
 
@@ -733,7 +741,7 @@ def api_submit():
         return jsonify({
             'success': True,
             'id': transaction_id,
-            'view_link': f"{Config.WEB_APP_URL}/view/{transaction_id}",
+            'view_link': url_for('view_transaction_page', id=transaction_id, _external=True),
             'deep_link': f"https://t.me/{Config.BOT_USERNAME}?start={transaction_id}"
         })
 
@@ -905,8 +913,7 @@ def verify_email_page():
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
 
-        edit_url = f"{Config.WEB_APP_URL}/transaction/{transaction_id}?token={token}"
-        return redirect(edit_url)
+        return redirect(url_for('edit_transaction_page', id=transaction_id, token=token, _external=True))
 
     return '''
     <!DOCTYPE html>
@@ -1164,8 +1171,7 @@ EDIT_HTML = """
 def edit_transaction_page(id):
     token = request.args.get('token')
     if not token:
-        # إعادة توجيه إلى صفحة التحقق من البريد
-        return redirect(url_for('verify_email_page', transaction_id=id))
+        return redirect(url_for('verify_email_page', transaction_id=id, _external=True))
     if not sheets_client or not sheets_client.verify_access_token(token, id):
         abort(403, description="رمز الوصول غير صالح أو منتهي الصلاحية.")
     return render_template_string(EDIT_HTML)
@@ -1237,7 +1243,7 @@ def index():
 # ------------------ صفحات QR ------------------
 @app.route('/qr/<id>')
 def qr_page(id):
-    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    view_link = url_for('view_transaction_page', id=id, _external=True)
     qr_base64 = QRGenerator.generate_qr(view_link)
     html = f"""
     <!DOCTYPE html>
@@ -1278,7 +1284,7 @@ def qr_page(id):
 
 @app.route('/qr_image/<id>')
 def qr_image(id):
-    view_link = f"{Config.WEB_APP_URL}/view/{id}"
+    view_link = url_for('view_transaction_page', id=id, _external=True)
     qr_base64 = QRGenerator.generate_qr(view_link)
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
@@ -1513,7 +1519,7 @@ def verify_page():
                     <p>رقم المعاملة الخاص بك:</p>
                     <div class="id">{transaction_id}</div>
                     <p> احتفظ بهذا الرقم لمتابعة المعاملة </p>
-                    <a href="{Config.WEB_APP_URL}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
+                    <a href="{url_for('view_transaction_page', id=transaction_id, _external=True)}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
                     <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت</a>
                 </div>
             </div>
@@ -1678,7 +1684,7 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
                 ws.update_cell(row_number, 8, transaction_id)
             logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
 
-        view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
+        view_link = url_for('view_transaction_page', id=transaction_id, _external=True)
         hyperlink_formula = f'=HYPERLINK("{view_link}", "عرض المعاملة")'
         try:
             headers = ws.row_values(1)
@@ -1690,7 +1696,7 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         customer_email = new_row.get('البريد الإلكتروني')
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
         if transaction_id and customer_email:
-            qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
+            qr_page_link = url_for('qr_page', id=transaction_id, _external=True)
             try:
                 from email_service import EmailService
                 success = EmailService.send_customer_email(
@@ -1747,7 +1753,6 @@ def check_new_transactions():
 # ------------------ جدولة المهام ------------------
 if sheets_client:
     try:
-        # استخدم الدالة السريعة للحصول على العدد الفريد
         last_row_count = len(sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER))
     except Exception as e:
         logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
@@ -1757,7 +1762,7 @@ if sheets_client:
     scheduler.start()
     scheduler.add_job(
         func=check_new_transactions,
-        trigger=IntervalTrigger(seconds=30),  # تقليل التكرار لتجنب 429
+        trigger=IntervalTrigger(seconds=30),
         id='check_transactions',
         replace_existing=True
     )
