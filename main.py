@@ -796,14 +796,12 @@ def api_transaction(id):
 
     else:
         updates = request.json
-        # جلب أحدث صف للمعاملة (لأخذ البيانات القديمة)
         old_data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
         if not old_data:
             return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
 
-        # إنشاء صف جديد يحتوي على جميع البيانات القديمة + التحديثات
         new_row = [''] * len(headers)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now()
@@ -830,7 +828,6 @@ def api_transaction(id):
         changes = ', '.join(updates.keys())
         sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes}", employee_name)
 
-        # بناء رسالة إشعار للمستخدم
         user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
@@ -868,7 +865,6 @@ def api_transaction(id):
                 background_loop
             )
 
-        # أرشفة إذا أصبحت مكتملة
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
                 archive_success = sheets_client.archive_transaction(id)
