@@ -46,7 +46,11 @@ class GoogleSheetsClient:
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON"
             ],
             Config.SHEET_HISTORY: ["timestamp", "ID", "action", "user"],
-            Config.SHEET_QR: ["name", "transaction_id", "view_link", "qr_image_url", "qr_page_link", "edit_link"],
+            Config.SHEET_QR: [
+                "transaction_id",
+                "qr_image",
+                "qr_verify_link"
+            ],
             Config.SHEET_USERS: ["transaction_id", "chat_id"],
             Config.SHEET_ACCESS_TOKENS: ["token", "transaction_id", "email", "expires_at"],
             Config.SHEET_ARCHIVE_MANAGER: [

@@ -699,19 +699,15 @@ def api_submit():
         if all_rows:
             logger.info(f"📊 آخر صف مضاف: {all_rows[-1]}")
 
+        # ------------------ ورقة QR (الأعمدة الجديدة فقط) ------------------
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
-            view_link = f"{Config.WEB_APP_URL}/view/{transaction_id}"
-            qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
+            verify_link = f"{Config.WEB_APP_URL}/verify-email?transaction_id={transaction_id}"
             qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
-            qr_ws.append_row([
-                name,
-                transaction_id,
-                view_link,
-                qr_image_url,
-                qr_page_link,
-                edit_link
-            ])
+            qr_ws.append_row([transaction_id, '', ''])  # placeholder
+            new_row_num = len(qr_ws.get_all_values())
+            qr_ws.update_cell(new_row_num, 2, f'=IMAGE("{qr_image_url}")')
+            qr_ws.update_cell(new_row_num, 3, f'=HYPERLINK("{verify_link}", "فتح صفحة التحقق")')
             logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR")
 
         sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
@@ -768,7 +764,7 @@ def api_transactions():
     } for r in records]
     return jsonify(result)
 
-# ================== النقطة الأهم: تعديل المعاملة (إضافة صف جديد) ==================
+# ================== نقطة تعديل المعاملة (إضافة صف جديد) ==================
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
     if not sheets_client:
@@ -1198,7 +1194,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+              </table>
         </div>
     </div>
     <script>
@@ -1211,7 +1207,7 @@ INDEX_HTML = """<!DOCTYPE html>
                     <td class="px-4 py-2">${t.status}</td>
                     <td class="px-4 py-2">${t.employee}</td>
                     <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                 </tr>`;
+                  </tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1691,27 +1687,8 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         except ValueError:
             ws.update_cell(row_number, 21, hyperlink_formula)
 
-        qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
-        if qr_ws:
-            name = new_row.get('اسم صاحب المعاملة الثلاثي', '')
-            email = new_row.get('البريد الإلكتروني', '')
-            qr_page_link = f"{Config.WEB_APP_URL}/qr/{transaction_id}"
-            qr_image_url = f"{Config.WEB_APP_URL}/qr_image/{transaction_id}"
-            qr_ws.append_row([name, email, transaction_id, view_link, qr_image_url, qr_page_link])
-            new_row_num = len(qr_ws.get_all_values())
-            try:
-                qr_headers = qr_ws.row_values(1)
-                link_col_qr = qr_headers.index('رابط المعاملة') + 1
-                image_col_qr = qr_headers.index('صورة QR') + 1
-                qr_page_col = qr_headers.index('صفحة QR') + 1
-                qr_ws.update_cell(new_row_num, link_col_qr, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                qr_ws.update_cell(new_row_num, image_col_qr, f'=IMAGE("{qr_image_url}")')
-                qr_ws.update_cell(new_row_num, qr_page_col, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
-            except (ValueError, IndexError):
-                qr_ws.update_cell(new_row_num, 4, f'=HYPERLINK("{view_link}", "عرض المعاملة")')
-                qr_ws.update_cell(new_row_num, 5, f'=IMAGE("{qr_image_url}")')
-                qr_ws.update_cell(new_row_num, 6, f'=HYPERLINK("{qr_page_link}", "عرض QR كبير")')
-            logger.info(f"📸 تم إدراج بيانات QR للمعاملة {transaction_id}")
+        # ورقة QR لم تعد تُستخدم هنا، لأننا نضيف بيانات QR في api_submit
+        # لكننا نحتفظ بالكود للتوافق مع المعاملات القديمة
 
         customer_email = new_row.get('البريد الإلكتروني')
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')

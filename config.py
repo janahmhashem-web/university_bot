@@ -9,7 +9,7 @@ class Config:
     ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', '0'))
     ADMIN_SECRET = os.getenv('ADMIN_SECRET')
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
-    SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')   # <-- هذا هو المطلوب
+    SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 
     # Google Sheets
     GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
