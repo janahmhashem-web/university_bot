@@ -10,6 +10,7 @@ import uuid
 import tempfile
 import time
 import random
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,6 @@ class GoogleSheetsClient:
 
     # ================== الدوال السريعة ==================
     def get_latest_transactions_fast(self, sheet_name):
-        """إرجاع أحدث نسخة لكل معاملة (سريع باستخدام get_all_values)"""
         ws = self.get_worksheet(sheet_name)
         if not ws:
             return []
@@ -152,6 +152,103 @@ class GoogleSheetsClient:
                 return row
         return None
 
+    # ================== دوال إدارة شيتات الأقسام ==================
+    def _sanitize_sheet_name(self, name):
+        """تنظيف اسم الشيت ليتوافق مع قيود Google Sheets"""
+        # استبدال الأحرف غير المسموح بها بشرطة سفلية
+        name = re.sub(r'[\\/*?:\[\]]', '_', name)
+        # الحد الأقصى لطول اسم الشيت هو 100 حرف
+        name = name[:100]
+        return name.strip()
+
+    def get_or_create_department_sheet(self, department_name):
+        """الحصول على شيت القسم أو إنشائه إذا لم يكن موجوداً (بنفس أعمدة manager)"""
+        sheet_name = self._sanitize_sheet_name(department_name)
+        try:
+            ws = self.spreadsheet.worksheet(sheet_name)
+            logger.debug(f"شيت القسم موجود: {sheet_name}")
+            return ws
+        except gspread.WorksheetNotFound:
+            # إنشاء شيت جديد بنفس أعمدة شيت manager
+            headers = self.get_worksheet('manager').row_values(1)
+            ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(headers))
+            for col, header in enumerate(headers, 1):
+                ws.update_cell(1, col, header)
+            logger.info(f"✅ تم إنشاء شيت جديد للقسم: {sheet_name}")
+            return ws
+        except Exception as e:
+            logger.error(f"فشل الحصول على شيت القسم {department_name}: {e}")
+            return None
+
+    def append_to_department_sheet(self, department_name, row_data, headers):
+        """إضافة صف إلى شيت القسم"""
+        ws = self.get_or_create_department_sheet(department_name)
+        if ws:
+            try:
+                ws.append_row(row_data)
+                logger.info(f"✅ تم إضافة المعاملة إلى شيت القسم: {department_name}")
+                return True
+            except Exception as e:
+                logger.error(f"فشل إضافة الصف إلى شيت القسم {department_name}: {e}")
+        return False
+
+    def get_or_create_department_archive(self, department_name):
+        """إنشاء شيت أرشيف للقسم إذا لم يكن موجوداً"""
+        archive_name = f"أرشيف_{self._sanitize_sheet_name(department_name)}"
+        try:
+            ws = self.spreadsheet.worksheet(archive_name)
+            return ws
+        except gspread.WorksheetNotFound:
+            headers = self.get_worksheet('archive_manager').row_values(1)  # نفس أعمدة archive_manager
+            ws = self.spreadsheet.add_worksheet(title=archive_name, rows=1, cols=len(headers))
+            for col, header in enumerate(headers, 1):
+                ws.update_cell(1, col, header)
+            logger.info(f"✅ تم إنشاء شيت أرشيف للقسم: {archive_name}")
+            return ws
+        except Exception as e:
+            logger.error(f"فشل إنشاء أرشيف القسم {department_name}: {e}")
+            return None
+
+    def archive_from_department(self, transaction_id, department_name, row_data, archive_time):
+        """نقل المعاملة من شيت القسم إلى أرشيف القسم"""
+        dept_sheet = self.get_or_create_department_sheet(department_name)
+        if not dept_sheet:
+            return False
+        # البحث عن الصف في شيت القسم وحذفه
+        all_rows = dept_sheet.get_all_values()
+        headers = dept_sheet.row_values(1)
+        try:
+            id_col = headers.index('ID') + 1
+        except ValueError:
+            return False
+        row_num = None
+        for i, row in enumerate(all_rows):
+            if i == 0: continue
+            if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
+                row_num = i + 1
+                break
+        if row_num:
+            dept_sheet.delete_row(row_num)
+            logger.info(f"✅ تم حذف المعاملة {transaction_id} من شيت القسم {department_name}")
+        else:
+            logger.warning(f"لم يتم العثور على المعاملة {transaction_id} في شيت القسم {department_name}")
+
+        # إضافة إلى أرشيف القسم
+        archive_sheet = self.get_or_create_department_archive(department_name)
+        if archive_sheet:
+            # إضافة تاريخ الأرشفة إذا لم يكن موجوداً
+            row_data_with_archive = row_data.copy()
+            try:
+                headers_archive = archive_sheet.row_values(1)
+                if 'تاريخ_الأرشفة' in headers_archive:
+                    idx = headers_archive.index('تاريخ_الأرشفة')
+                    row_data_with_archive[idx] = archive_time
+                archive_sheet.append_row(row_data_with_archive)
+                logger.info(f"✅ تم أرشفة المعاملة {transaction_id} في أرشيف القسم {department_name}")
+            except Exception as e:
+                logger.error(f"فشل إضافة المعاملة إلى أرشيف القسم {department_name}: {e}")
+        return True
+
     # ================== الدوال الأساسية ==================
     def add_history_entry(self, transaction_id, action, user="النظام"):
         try:
@@ -164,9 +261,6 @@ class GoogleSheetsClient:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
     def generate_access_token(self, transaction_id, email, expiry_minutes=1440):
-        """
-        توليد رمز وصول صالح لمدة 24 ساعة (1440 دقيقة)
-        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
@@ -182,26 +276,21 @@ class GoogleSheetsClient:
             return None
 
     def verify_access_token(self, token, transaction_id):
-        """
-        التحقق من صحة رمز الوصول وعدم انتهاء صلاحيته
-        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
                 logger.error("ورقة access_tokens غير موجودة")
                 return False
             records = ws.get_all_records()
-            now = datetime.now()  # كائن datetime للمقارنة
+            now = datetime.now()
             for row in records:
                 if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
                     expires_at_str = row.get('expires_at')
                     if not expires_at_str:
-                        logger.warning(f"رمز {token} ليس له expires_at")
                         continue
                     try:
                         expires_at = datetime.fromisoformat(expires_at_str)
                     except ValueError:
-                        # محاولة تنسيق آخر (بدون microseconds)
                         try:
                             expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
                         except ValueError:
@@ -209,9 +298,6 @@ class GoogleSheetsClient:
                             continue
                     if expires_at > now:
                         return True
-                    else:
-                        logger.warning(f"Token منتهي الصلاحية: {expires_at} < {now}")
-                        return False
             return False
         except Exception as e:
             logger.error(f"فشل التحقق من رمز الوصول: {e}", exc_info=True)
@@ -230,8 +316,8 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
 
-    def archive_transaction(self, transaction_id):
-        """نقل المعاملة وسجلها التاريخي إلى الأرشيف"""
+    def archive_transaction(self, transaction_id, department_name=None):
+        """نقل المعاملة من manager إلى archive_manager ومن شيت القسم إلى أرشيف القسم (إن وجد)"""
         try:
             ws_manager = self.get_worksheet('manager')
             if not ws_manager:
@@ -242,6 +328,7 @@ class GoogleSheetsClient:
             archive_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             latest_data['تاريخ_الأرشفة'] = archive_time
 
+            # 1. أرشفة في archive_manager (الأرشيف العام)
             ws_archive_manager = self.get_worksheet('archive_manager')
             if not ws_archive_manager:
                 logger.error("ورقة archive_manager غير موجودة")
@@ -250,6 +337,34 @@ class GoogleSheetsClient:
             new_row = [latest_data.get(header, '') for header in headers]
             ws_archive_manager.append_row(new_row)
 
+            # 2. حذف من manager
+            all_rows = ws_manager.get_all_values()
+            headers_mgr = ws_manager.row_values(1)
+            id_col = None
+            try:
+                id_col = headers_mgr.index('ID') + 1
+            except ValueError:
+                pass
+            if id_col:
+                rows_to_delete = []
+                for i, row in enumerate(all_rows):
+                    if i == 0: continue
+                    if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
+                        rows_to_delete.append(i+1)
+                for row_num in sorted(rows_to_delete, reverse=True):
+                    ws_manager.delete_row(row_num)
+
+            # 3. أرشفة من شيت القسم (إن وجد)
+            if department_name:
+                # نحتاج إلى بيانات الصف كقائمة (لإضافتها في أرشيف القسم)
+                # سنستخدم latest_data المحولة إلى قائمة حسب ترتيب أعمدة شيت القسم
+                dept_headers = self.get_or_create_department_sheet(department_name).row_values(1)
+                dept_row = []
+                for header in dept_headers:
+                    dept_row.append(latest_data.get(header, ''))
+                self.archive_from_department(transaction_id, department_name, dept_row, archive_time)
+
+            # 4. أرشفة سجل التاريخ
             ws_history = self.get_worksheet('history')
             if ws_history:
                 records = ws_history.get_all_records()
@@ -268,26 +383,100 @@ class GoogleSheetsClient:
                     for row_num in sorted(rows_to_delete, reverse=True):
                         ws_history.delete_row(row_num)
 
-            # حذف جميع صفوف المعاملة من manager
-            all_rows = ws_manager.get_all_values()
-            headers = ws_manager.row_values(1)
-            id_col = None
-            try:
-                id_col = headers.index('ID') + 1
-            except ValueError:
-                pass
-            if id_col:
-                rows_to_delete = []
-                for i, row in enumerate(all_rows):
-                    if i == 0: continue
-                    if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
-                        rows_to_delete.append(i+1)
-                for row_num in sorted(rows_to_delete, reverse=True):
-                    ws_manager.delete_row(row_num)
             return True
         except Exception as e:
             logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}", exc_info=True)
             return False
+
+    # ================== دوال الإحصائيات المتقدمة للمدير ==================
+    def get_distinct_departments(self):
+        """إرجاع قائمة الأقسام الفريدة"""
+        records = self.get_latest_transactions_fast('manager')
+        departments = set()
+        for r in records:
+            dept = r.get('القسم', '').strip()
+            if dept:
+                departments.add(dept)
+        return sorted(list(departments))
+
+    def get_distinct_employees(self):
+        """إرجاع قائمة الموظفين المسؤولين الفريدة"""
+        records = self.get_latest_transactions_fast('manager')
+        employees = set()
+        for r in records:
+            emp = r.get('الموظف المسؤول', '').strip()
+            if emp and emp != 'غير معروف':
+                employees.add(emp)
+        return sorted(list(employees))
+
+    def get_department_stats(self):
+        """إحصائيات عدد المعاملات لكل قسم"""
+        records = self.get_latest_transactions_fast('manager')
+        stats = {}
+        for r in records:
+            dept = r.get('القسم', 'غير محدد')
+            stats[dept] = stats.get(dept, 0) + 1
+        return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
+
+    def get_employee_stats(self):
+        """إحصائيات عدد المعاملات لكل موظف"""
+        records = self.get_latest_transactions_fast('manager')
+        stats = {}
+        for r in records:
+            emp = r.get('الموظف المسؤول', 'غير معروف')
+            stats[emp] = stats.get(emp, 0) + 1
+        return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
+
+    def get_status_distribution(self):
+        """توزيع المعاملات حسب الحالة"""
+        records = self.get_latest_transactions_fast('manager')
+        stats = {'جديد': 0, 'قيد المعالجة': 0, 'مكتملة': 0, 'متأخرة': 0, 'أخرى': 0}
+        for r in records:
+            status = r.get('الحالة', 'أخرى')
+            if status in stats:
+                stats[status] += 1
+            else:
+                stats['أخرى'] += 1
+        return stats
+
+    def get_recent_transactions(self, limit=10):
+        """آخر المعاملات حسب آخر تعديل"""
+        records = self.get_latest_transactions_sorted_fast('manager')
+        return records[:limit]
+
+    def get_transactions_by_department(self, department):
+        """تصفية المعاملات حسب القسم"""
+        return self.filter_transactions('manager', department=department)
+
+    def get_transactions_by_employee(self, employee):
+        """تصفية المعاملات حسب الموظف المسؤول"""
+        return self.filter_transactions('manager', employee=employee)
+
+    def get_employee_workload(self):
+        """حمل العمل لكل موظف (عدد المعاملات وعدد المتأخرة)"""
+        records = self.get_latest_transactions_fast('manager')
+        workload = {}
+        for r in records:
+            emp = r.get('الموظف المسؤول', 'غير معروف')
+            if emp not in workload:
+                workload[emp] = {'total': 0, 'delayed': 0}
+            workload[emp]['total'] += 1
+            if r.get('التأخير') == 'نعم':
+                workload[emp]['delayed'] += 1
+        return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
+
+    def get_department_workload(self):
+        """حمل العمل لكل قسم (عدد المعاملات وعدد المتأخرة)"""
+        records = self.get_latest_transactions_fast('manager')
+        workload = {}
+        for r in records:
+            dept = r.get('القسم', 'غير محدد')
+            if dept not in workload:
+                workload[dept] = {'total': 0, 'delayed': 0}
+            workload[dept]['total'] += 1
+            if r.get('التأخير') == 'نعم':
+                workload[dept]['delayed'] += 1
+        return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
 
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
