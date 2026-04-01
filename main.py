@@ -950,7 +950,8 @@ def api_submit():
         def update_qr():
             qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
             if qr_ws:
-                qr_ws.append_row([transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'])
+                qr_image_url = f"{base_url}/qr_image/{transaction_id}"
+                qr_ws.append_row([transaction_id, f'=IMAGE("{qr_image_url}")', f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'])
                 logger.debug(f"✅ تم تحديث QR للمعاملة {transaction_id}")
         rate_limit_write()
         executor.submit(update_qr)
