@@ -272,13 +272,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if transaction_id:
-            domain = get_domain_from_url(Config.WEB_APP_URL)
-            verify_link = f"{domain}/verify-email?transaction_id={transaction_id}"
-            qr_base64 = QRGenerator.generate_qr(f"https://{verify_link}")
+            base_url = request.host_url.rstrip('/')
+            verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+            qr_base64 = QRGenerator.generate_qr(verify_link)
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=base64.b64decode(qr_base64),
-                caption=instruction_text + f"\n\n🔗 *رابط التحقق:*\n`https://{verify_link}`\n\nقم بمسح الرمز أو فتح الرابط للدخول إلى صفحة التعديل.",
+                caption=instruction_text + f"\n\n🔗 *رابط التحقق:*\n`{verify_link}`\n\nقم بمسح الرمز أو فتح الرابط للدخول إلى صفحة التعديل.",
                 parse_mode='Markdown'
             )
             await query.message.delete()
@@ -441,8 +441,8 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
                     if key in data and data[key]:
                         msg += f"• {key}: {data[key]}\n"
-                domain = get_domain_from_url(Config.WEB_APP_URL)
-                msg += f"\n🔗 [رابط المتابعة](https://{domain}/view/{transaction_id})"
+                base_url = request.host_url.rstrip('/')
+                msg += f"\n🔗 [رابط المتابعة]({base_url}/view/{transaction_id})"
                 await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
             else:
                 await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
@@ -542,13 +542,13 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"خطأ في جلب معاملة المستخدم: {e}")
 
     if transaction_id:
-        domain = get_domain_from_url(Config.WEB_APP_URL)
-        verify_link = f"{domain}/verify-email?transaction_id={transaction_id}"
-        qr_base64 = QRGenerator.generate_qr(f"https://{verify_link}")
+        base_url = request.host_url.rstrip('/')
+        verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+        qr_base64 = QRGenerator.generate_qr(verify_link)
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=base64.b64decode(qr_base64),
-            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي (ينتهي بـ @it.jan.ah)\n3️⃣ سيتم توجيهك إلى صفحة التعديل.\n\n🔗 https://{verify_link}",
+            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي (ينتهي بـ @it.jan.ah)\n3️⃣ سيتم توجيهك إلى صفحة التعديل.\n\n🔗 {verify_link}",
             parse_mode='Markdown'
         )
     else:
@@ -900,8 +900,8 @@ def api_submit():
 
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
-        domain = request.host
-        edit_link = f"https://{domain}/transaction/{transaction_id}"
+        base_url = request.host_url.rstrip('/')
+        edit_link = f"{base_url}/transaction/{transaction_id}"
         hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
 
         for idx, header in enumerate(headers):
@@ -928,7 +928,14 @@ def api_submit():
 
         # إضافة نسخة إلى شيت القسم
         if department:
-            sheets_client.append_to_department_sheet(department, new_row, headers)
+            logger.info(f"محاولة إضافة المعاملة إلى شيت القسم: {department}")
+            success = sheets_client.append_to_department_sheet(department, new_row, headers)
+            if success:
+                logger.info(f"✅ تم إضافة المعاملة إلى شيت القسم {department}")
+            else:
+                logger.error(f"❌ فشل إضافة المعاملة إلى شيت القسم {department}")
+        else:
+            logger.warning("⚠️ القسم فارغ، لم تتم الإضافة إلى شيت القسم")
 
         all_rows = ws.get_all_values()
         logger.info(f"📊 عدد الصفوف بعد الإضافة: {len(all_rows)}")
@@ -938,8 +945,8 @@ def api_submit():
         # ورقة QR
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
-            verify_link = f"{domain}/verify-email?transaction_id={transaction_id}"
-            qr_image_url = f"{domain}/qr_image/{transaction_id}"
+            verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+            qr_image_url = f"{base_url}/qr_image/{transaction_id}"
             qr_ws.append_row([transaction_id, "", ""])
             new_row_num = len(qr_ws.get_all_values())
             qr_ws.update_cell(new_row_num, 2, f'=IMAGE("{qr_image_url}")')
@@ -958,7 +965,7 @@ def api_submit():
                 background_loop
             )
 
-        full_view_link = f"https://{domain}/view/{transaction_id}"
+        full_view_link = f"{base_url}/view/{transaction_id}"
         return jsonify({
             'success': True,
             'id': transaction_id,
@@ -1086,8 +1093,8 @@ def api_transaction(id):
 
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
-                # تمرير القسم لأرشفة شيت القسم أيضاً
                 old_dept = old_data.get('القسم', '')
+                logger.info(f"أرشفة المعاملة {id} من القسم {old_dept}")
                 archive_success = sheets_client.archive_transaction(id, department_name=old_dept)
                 if archive_success:
                     return jsonify({'success': True, 'message': 'تم الحفظ والمعاملة مؤرشفة'})
@@ -1136,8 +1143,8 @@ def verify_email_page():
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
 
-        domain = request.host
-        edit_url = f"https://{domain}/transaction/{transaction_id}?token={token}"
+        base_url = request.host_url.rstrip('/')
+        edit_url = f"{base_url}/transaction/{transaction_id}?token={token}"
         logger.info(f"✅ إعادة التوجيه إلى: {edit_url}")
         return redirect(edit_url)
 
@@ -1354,7 +1361,7 @@ EDIT_HTML = """
 def edit_transaction_page(id):
     token = request.args.get('token')
     if not token:
-        return redirect(f"/verify-email?transaction_id={id}")
+        return redirect(url_for('verify_email_page', transaction_id=id))
     if not sheets_client or not sheets_client.verify_access_token(token, id):
         abort(403, description="رمز الوصول غير صالح أو منتهي الصلاحية.")
     return render_template_string(EDIT_HTML)
@@ -1454,8 +1461,8 @@ def index():
 # ------------------ صفحات QR ------------------
 @app.route('/qr/<id>')
 def qr_page(id):
-    domain = request.host
-    view_link = f"https://{domain}/view/{id}"
+    base_url = request.host_url.rstrip('/')
+    view_link = f"{base_url}/view/{id}"
     qr_base64 = QRGenerator.generate_qr(view_link)
     html = f"""
     <!DOCTYPE html>
@@ -1496,8 +1503,8 @@ def qr_page(id):
 
 @app.route('/qr_image/<id>')
 def qr_image(id):
-    domain = request.host
-    view_link = f"https://{domain}/view/{id}"
+    base_url = request.host_url.rstrip('/')
+    view_link = f"{base_url}/view/{id}"
     qr_base64 = QRGenerator.generate_qr(view_link)
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
@@ -1705,7 +1712,7 @@ def verify_page():
                 break
 
     if found and transaction_id:
-        domain = request.host
+        base_url = request.host_url.rstrip('/')
         return f"""
         <!DOCTYPE html>
         <html dir="rtl">
@@ -1733,7 +1740,7 @@ def verify_page():
                     <p>رقم المعاملة الخاص بك:</p>
                     <div class="id">{transaction_id}</div>
                     <p> احتفظ بهذا الرقم لمتابعة المعاملة </p>
-                    <a href="https://{domain}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
+                    <a href="{base_url}/view/{transaction_id}" target="_blank" class="btn">🔗 عرض التفاصيل</a>
                     <a href="https://t.me/{Config.BOT_USERNAME}?start={transaction_id}" target="_blank" class="btn btn-telegram">📱 فتح البوت</a>
                 </div>
             </div>
