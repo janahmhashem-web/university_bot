@@ -155,9 +155,7 @@ class GoogleSheetsClient:
     # ================== دوال إدارة شيتات الأقسام ==================
     def _sanitize_sheet_name(self, name):
         """تنظيف اسم الشيت ليتوافق مع قيود Google Sheets"""
-        # استبدال الأحرف غير المسموح بها بشرطة سفلية
         name = re.sub(r'[\\/*?:\[\]]', '_', name)
-        # الحد الأقصى لطول اسم الشيت هو 100 حرف
         name = name[:100]
         return name.strip()
 
@@ -170,7 +168,11 @@ class GoogleSheetsClient:
             return ws
         except gspread.WorksheetNotFound:
             # إنشاء شيت جديد بنفس أعمدة شيت manager
-            headers = self.get_worksheet('manager').row_values(1)
+            manager_ws = self.get_worksheet('manager')
+            if not manager_ws:
+                logger.error("لا يمكن العثور على ورقة manager لإنشاء شيت القسم")
+                return None
+            headers = manager_ws.row_values(1)
             ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(headers))
             for col, header in enumerate(headers, 1):
                 ws.update_cell(1, col, header)
@@ -182,6 +184,8 @@ class GoogleSheetsClient:
 
     def append_to_department_sheet(self, department_name, row_data, headers):
         """إضافة صف إلى شيت القسم"""
+        if not department_name:
+            return False
         ws = self.get_or_create_department_sheet(department_name)
         if ws:
             try:
@@ -199,7 +203,12 @@ class GoogleSheetsClient:
             ws = self.spreadsheet.worksheet(archive_name)
             return ws
         except gspread.WorksheetNotFound:
-            headers = self.get_worksheet('archive_manager').row_values(1)  # نفس أعمدة archive_manager
+            # نفس أعمدة archive_manager
+            arch_manager_ws = self.get_worksheet('archive_manager')
+            if not arch_manager_ws:
+                logger.error("لا يمكن العثور على archive_manager لإنشاء أرشيف القسم")
+                return None
+            headers = arch_manager_ws.row_values(1)
             ws = self.spreadsheet.add_worksheet(title=archive_name, rows=1, cols=len(headers))
             for col, header in enumerate(headers, 1):
                 ws.update_cell(1, col, header)
@@ -390,7 +399,6 @@ class GoogleSheetsClient:
 
     # ================== دوال الإحصائيات المتقدمة للمدير ==================
     def get_distinct_departments(self):
-        """إرجاع قائمة الأقسام الفريدة"""
         records = self.get_latest_transactions_fast('manager')
         departments = set()
         for r in records:
@@ -400,7 +408,6 @@ class GoogleSheetsClient:
         return sorted(list(departments))
 
     def get_distinct_employees(self):
-        """إرجاع قائمة الموظفين المسؤولين الفريدة"""
         records = self.get_latest_transactions_fast('manager')
         employees = set()
         for r in records:
@@ -410,7 +417,6 @@ class GoogleSheetsClient:
         return sorted(list(employees))
 
     def get_department_stats(self):
-        """إحصائيات عدد المعاملات لكل قسم"""
         records = self.get_latest_transactions_fast('manager')
         stats = {}
         for r in records:
@@ -419,7 +425,6 @@ class GoogleSheetsClient:
         return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
 
     def get_employee_stats(self):
-        """إحصائيات عدد المعاملات لكل موظف"""
         records = self.get_latest_transactions_fast('manager')
         stats = {}
         for r in records:
@@ -428,7 +433,6 @@ class GoogleSheetsClient:
         return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
 
     def get_status_distribution(self):
-        """توزيع المعاملات حسب الحالة"""
         records = self.get_latest_transactions_fast('manager')
         stats = {'جديد': 0, 'قيد المعالجة': 0, 'مكتملة': 0, 'متأخرة': 0, 'أخرى': 0}
         for r in records:
@@ -440,20 +444,16 @@ class GoogleSheetsClient:
         return stats
 
     def get_recent_transactions(self, limit=10):
-        """آخر المعاملات حسب آخر تعديل"""
         records = self.get_latest_transactions_sorted_fast('manager')
         return records[:limit]
 
     def get_transactions_by_department(self, department):
-        """تصفية المعاملات حسب القسم"""
         return self.filter_transactions('manager', department=department)
 
     def get_transactions_by_employee(self, employee):
-        """تصفية المعاملات حسب الموظف المسؤول"""
         return self.filter_transactions('manager', employee=employee)
 
     def get_employee_workload(self):
-        """حمل العمل لكل موظف (عدد المعاملات وعدد المتأخرة)"""
         records = self.get_latest_transactions_fast('manager')
         workload = {}
         for r in records:
@@ -466,7 +466,6 @@ class GoogleSheetsClient:
         return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
 
     def get_department_workload(self):
-        """حمل العمل لكل قسم (عدد المعاملات وعدد المتأخرة)"""
         records = self.get_latest_transactions_fast('manager')
         workload = {}
         for r in records:
