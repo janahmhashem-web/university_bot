@@ -27,9 +27,9 @@ class AIAssistant:
             # 3. بناء السياق من بيانات المعاملة إن وجدت
             context = ""
             if transaction_id and self.sheets_client:
-                row_info = self.sheets_client.get_row_by_id("manager", transaction_id)
-                if row_info:
-                    data = row_info['data']
+                # استخدام الدالة الصحيحة: get_latest_row_by_id_fast
+                data = self.sheets_client.get_latest_row_by_id_fast("manager", transaction_id)
+                if data:
                     context = self._format_transaction_context(data)
                     # إضافة رابط QR إذا طلب المستخدم QR
                     if "qr" in user_message.lower() or "قريء" in user_message:
