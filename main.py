@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import atexit
 import requests
+from collections import deque
 from flask import Flask, request, jsonify, render_template_string, Response, abort, redirect, url_for, session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
@@ -33,6 +34,24 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+# ------------------ إعدادات الأداء ------------------
+MAX_WORKERS = 10                     # عدد العاملين المتوازيين
+WRITE_RATE_LIMIT = 250               # الحد الأقصى للطلبات في الدقيقة
+RATE_WINDOW = 60
+write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
+
+def rate_limit_write():
+    """التحكم في معدل طلبات الكتابة لتجنب تجاوز حدود Google Sheets API"""
+    while len(write_timestamps) >= WRITE_RATE_LIMIT:
+        oldest = write_timestamps[0]
+        if time.time() - oldest < RATE_WINDOW:
+            time.sleep(0.05)
+        else:
+            write_timestamps.popleft()
+    write_timestamps.append(time.time())
+
+executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
 # ------------------ دالة مساعدة للنطاق ------------------
 def get_domain_from_url(url):
@@ -217,7 +236,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    logger.info(f"🔘 تم الضغط على زر: {query.data}")
+    logger.debug(f"🔘 تم الضغط على زر: {query.data}")
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
@@ -663,7 +682,6 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, parse_mode='Markdown')
         return
 
-    # إذا لم تكن هناك حالة معلقة، معالجة كرسالة عادية (ذكاء اصطناعي)
     await ai_chat_handler(update, context)
 
 async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -673,7 +691,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name or ""
 
     if is_admin:
-        # ردود سريعة للمدير بدون استخدام AI
+        # ردود سريعة للمدير
         msg_lower = user_message.lower()
         if any(word in msg_lower for word in ['جميع المعاملات', 'قائمة المعاملات', 'كل المعاملات', 'عرض الكل']):
             response = get_all_transactions_list()
@@ -713,7 +731,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("الرجاء إدخال رقم المعاملة بشكل صحيح: /analyze MUT-123456...")
                 return
 
-        # استعلامات إضافية ذكية للمدير
+        # استعلامات ذكية
         if 'قسم' in user_message:
             dept_name = re.search(r'قسم\s+(.+?)(?:\s|$)', user_message)
             if dept_name:
@@ -739,7 +757,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ عدد المعاملات المتأخرة: {len(delayed)}")
             return
 
-        # إذا لم يطابق أي من الأوامر السريعة، نستخدم الذكاء الاصطناعي
+        # استخدام AI
         logger.info(f"🤖 استعلام ذكي من المدير {user_name}: {user_message[:50]}...")
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         if ai_assistant:
@@ -805,7 +823,7 @@ def webhook():
     try:
         logger.info("📩 تم استقبال طلب webhook")
         json_str = request.get_data(as_text=True)
-        logger.info(f"📦 محتوى webhook: {json_str[:200]}")
+        logger.debug(f"📦 محتوى webhook: {json_str[:200]}")
         update = Update.de_json(json.loads(json_str), bot_app.bot)
         future = asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
         try:
@@ -923,38 +941,33 @@ def api_submit():
                 new_row[idx] = transaction_id
             elif header == 'الرابط':
                 new_row[idx] = hyperlink_formula
+
+        # الكتابة إلى manager (متزامنة)
         ws.append_row(new_row)
-        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager (الصف الجديد)")
+        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager")
 
-        # إضافة نسخة إلى شيت القسم
+        # إضافة إلى شيت القسم (غير متزامن)
         if department:
-            logger.info(f"محاولة إضافة المعاملة إلى شيت القسم: {department}")
-            success = sheets_client.append_to_department_sheet(department, new_row, headers)
-            if success:
-                logger.info(f"✅ تم إضافة المعاملة إلى شيت القسم {department}")
-            else:
-                logger.error(f"❌ فشل إضافة المعاملة إلى شيت القسم {department}")
-        else:
-            logger.warning("⚠️ القسم فارغ، لم تتم الإضافة إلى شيت القسم")
+            rate_limit_write()
+            executor.submit(sheets_client.append_to_department_sheet, department, new_row, headers)
+            logger.debug(f"📌 تم إرسال مهمة كتابة شيت القسم {department} إلى الخلفية")
 
-        all_rows = ws.get_all_values()
-        logger.info(f"📊 عدد الصفوف بعد الإضافة: {len(all_rows)}")
-        if all_rows:
-            logger.info(f"📊 آخر صف مضاف: {all_rows[-1]}")
+        # إضافة إلى QR (غير متزامن)
+        def update_qr():
+            qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
+            if qr_ws:
+                verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+                qr_image_url = f"{base_url}/qr_image/{transaction_id}"
+                qr_ws.append_row([transaction_id, f'=IMAGE("{qr_image_url}")', f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'])
+                logger.debug(f"✅ تم تحديث QR للمعاملة {transaction_id}")
+        rate_limit_write()
+        executor.submit(update_qr)
 
-        # ورقة QR
-        qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
-        if qr_ws:
-            verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
-            qr_image_url = f"{base_url}/qr_image/{transaction_id}"
-            qr_ws.append_row([transaction_id, "", ""])
-            new_row_num = len(qr_ws.get_all_values())
-            qr_ws.update_cell(new_row_num, 2, f'=IMAGE("{qr_image_url}")')
-            qr_ws.update_cell(new_row_num, 3, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
-            logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR مع صيغ")
+        # إضافة إلى history (غير متزامن)
+        rate_limit_write()
+        executor.submit(sheets_client.add_history_entry, transaction_id, "تم إنشاء المعاملة", "النظام (API)")
 
-        sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
-
+        # إرسال إشعار للمدير (غير متزامن)
         if Config.ADMIN_CHAT_ID and background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
                 bot_app.bot.send_message(
@@ -965,11 +978,10 @@ def api_submit():
                 background_loop
             )
 
-        full_view_link = f"{base_url}/view/{transaction_id}"
         return jsonify({
             'success': True,
             'id': transaction_id,
-            'view_link': full_view_link,
+            'view_link': f"{base_url}/view/{transaction_id}",
             'deep_link': f"https://t.me/{Config.BOT_USERNAME}?start={transaction_id}"
         })
 
@@ -1887,7 +1899,6 @@ def view_transaction_page(id):
 
 # ------------------ معالجة المعاملات الجديدة ------------------
 last_row_count = 0
-executor = ThreadPoolExecutor(max_workers=10)
 
 def process_new_transaction(ws, row_number, new_row, transaction_id):
     try:
