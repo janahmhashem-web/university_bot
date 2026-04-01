@@ -84,7 +84,6 @@ if sheets_client:
 
 # ------------------ دوال مساعدة عامة ------------------
 async def notify_user(transaction_id, message):
-    """إرسال إشعار للمستخدم مع زر لعرض سجل التغييرات"""
     if not sheets_client or not bot_app or not background_loop:
         return
     try:
@@ -200,7 +199,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("💬 التواصل مع الدعم", callback_data="cmd_support")],
     ]
     if is_admin:
-        keyboard.append([InlineKeyboardButton("📈 إحصائيات", callback_data="cmd_stats")])
+        keyboard.append([InlineKeyboardButton("📊 إحصائيات متقدمة", callback_data="cmd_advanced_stats")])
+        keyboard.append([InlineKeyboardButton("🏢 إحصائيات الأقسام", callback_data="cmd_dept_stats")])
+        keyboard.append([InlineKeyboardButton("👥 إحصائيات الموظفين", callback_data="cmd_emp_stats")])
+        keyboard.append([InlineKeyboardButton("📈 توزيع الحالات", callback_data="cmd_status_dist")])
+        keyboard.append([InlineKeyboardButton("📋 آخر 10 معاملات", callback_data="cmd_recent")])
+        keyboard.append([InlineKeyboardButton("🔍 بحث متقدم", callback_data="cmd_advanced_search")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     msg = "👋 *اهلاً بك في بوت متابعة المعاملات*\n\n"
@@ -305,6 +309,99 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
         msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
         await query.edit_message_text(msg, parse_mode='Markdown')
+    elif data == "cmd_advanced_stats":
+        if user_id != Config.ADMIN_CHAT_ID:
+            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
+            return
+        if not sheets_client:
+            await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
+            return
+        total = len(sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER))
+        dept_count = len(sheets_client.get_distinct_departments())
+        emp_count = len(sheets_client.get_distinct_employees())
+        status_dist = sheets_client.get_status_distribution()
+        msg = f"📊 *إحصائيات عامة*\n"
+        msg += f"• إجمالي المعاملات: {total}\n"
+        msg += f"• عدد الأقسام: {dept_count}\n"
+        msg += f"• عدد الموظفين المسؤولين: {emp_count}\n"
+        msg += f"• توزيع الحالات:\n"
+        for status, count in status_dist.items():
+            if count > 0:
+                msg += f"   - {status}: {count}\n"
+        await query.edit_message_text(msg, parse_mode='Markdown')
+    elif data == "cmd_dept_stats":
+        if user_id != Config.ADMIN_CHAT_ID:
+            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
+            return
+        if not sheets_client:
+            await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
+            return
+        stats = sheets_client.get_department_stats()
+        if not stats:
+            await query.edit_message_text("لا توجد بيانات.")
+            return
+        msg = "🏢 *إحصائيات الأقسام*\n"
+        for dept, count in stats.items():
+            msg += f"• {dept}: {count} معاملة\n"
+        await query.edit_message_text(msg, parse_mode='Markdown')
+    elif data == "cmd_emp_stats":
+        if user_id != Config.ADMIN_CHAT_ID:
+            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
+            return
+        if not sheets_client:
+            await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
+            return
+        workload = sheets_client.get_employee_workload()
+        if not workload:
+            await query.edit_message_text("لا توجد بيانات.")
+            return
+        msg = "👥 *إحصائيات الموظفين (حمل العمل)*\n"
+        for emp, data in list(workload.items())[:20]:
+            msg += f"• {emp}: {data['total']} معاملة ({data['delayed']} متأخرة)\n"
+        await query.edit_message_text(msg, parse_mode='Markdown')
+    elif data == "cmd_status_dist":
+        if user_id != Config.ADMIN_CHAT_ID:
+            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
+            return
+        if not sheets_client:
+            await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
+            return
+        dist = sheets_client.get_status_distribution()
+        msg = "📈 *توزيع المعاملات حسب الحالة*\n"
+        for status, count in dist.items():
+            if count > 0:
+                msg += f"• {status}: {count}\n"
+        await query.edit_message_text(msg, parse_mode='Markdown')
+    elif data == "cmd_recent":
+        if user_id != Config.ADMIN_CHAT_ID:
+            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
+            return
+        if not sheets_client:
+            await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
+            return
+        recent = sheets_client.get_recent_transactions(10)
+        if not recent:
+            await query.edit_message_text("لا توجد معاملات.")
+            return
+        msg = "📋 *آخر 10 معاملات (حسب آخر تعديل)*\n"
+        for r in recent:
+            msg += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')} - {r.get('الحالة', '')}\n"
+        await query.edit_message_text(msg, parse_mode='Markdown')
+    elif data == "cmd_advanced_search":
+        if user_id != Config.ADMIN_CHAT_ID:
+            await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
+            return
+        context.user_data['awaiting'] = 'adv_search'
+        await query.edit_message_text(
+            "🔍 *البحث المتقدم*\n\n"
+            "أدخل معايير البحث بالصيغة:\n"
+            "`القسم:...`  أو `الموظف:...`  أو `الحالة:...`\n\n"
+            "مثال: `القسم:تكنولوجيا المعلومات`\n"
+            "مثال: `الموظف:أحمد`\n"
+            "مثال: `الحالة:متأخرة`\n"
+            "يمكنك الجمع بينها بفاصلة: `القسم:تقنيات, الحالة:جديد`",
+            parse_mode='Markdown'
+        )
     elif data.startswith("history_"):
         transaction_id = data.split("_", 1)[1]
         if not sheets_client:
@@ -525,6 +622,45 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif awaiting == 'analyze':
             context.args = [text]
             await analyze(update, context)
+        elif awaiting == 'adv_search':
+            # البحث المتقدم
+            criteria = {}
+            parts = text.split(',')
+            for part in parts:
+                if ':' in part:
+                    key, val = part.split(':', 1)
+                    key = key.strip()
+                    val = val.strip()
+                    if key == 'القسم':
+                        criteria['department'] = val
+                    elif key == 'الموظف':
+                        criteria['employee'] = val
+                    elif key == 'الحالة':
+                        criteria['status'] = val
+            if not criteria:
+                await update.message.reply_text("❌ لم يتم التعرف على المعايير. استخدم الصيغة المذكورة.")
+                return
+            records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
+            filtered = []
+            for r in records:
+                match = True
+                if 'department' in criteria and criteria['department'].lower() not in r.get('القسم', '').lower():
+                    match = False
+                if 'employee' in criteria and criteria['employee'].lower() not in r.get('الموظف المسؤول', '').lower():
+                    match = False
+                if 'status' in criteria and criteria['status'].lower() != r.get('الحالة', '').lower():
+                    match = False
+                if match:
+                    filtered.append(r)
+            if not filtered:
+                await update.message.reply_text("❌ لا توجد معاملات تطابق المعايير.")
+                return
+            msg = f"🔍 *نتائج البحث ({len(filtered)} معاملة)*\n"
+            for r in filtered[:20]:
+                msg += f"• `{r.get('ID')}` - {r.get('اسم صاحب المعاملة الثلاثي')} - {r.get('الحالة')}\n"
+            if len(filtered) > 20:
+                msg += f"\nو {len(filtered)-20} معاملات أخرى..."
+            await update.message.reply_text(msg, parse_mode='Markdown')
         return
 
     # إذا لم تكن هناك حالة معلقة، معالجة كرسالة عادية (ذكاء اصطناعي)
@@ -537,6 +673,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name or ""
 
     if is_admin:
+        # ردود سريعة للمدير بدون استخدام AI
         msg_lower = user_message.lower()
         if any(word in msg_lower for word in ['جميع المعاملات', 'قائمة المعاملات', 'كل المعاملات', 'عرض الكل']):
             response = get_all_transactions_list()
@@ -575,6 +712,34 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("الرجاء إدخال رقم المعاملة بشكل صحيح: /analyze MUT-123456...")
                 return
+
+        # استعلامات إضافية ذكية للمدير
+        if 'قسم' in user_message:
+            dept_name = re.search(r'قسم\s+(.+?)(?:\s|$)', user_message)
+            if dept_name:
+                dept = dept_name.group(1).strip()
+                filtered = sheets_client.get_transactions_by_department(dept)
+                if filtered:
+                    await update.message.reply_text(f"📊 المعاملات في قسم {dept}: {len(filtered)} معاملة")
+                else:
+                    await update.message.reply_text(f"لا توجد معاملات في قسم {dept}")
+                return
+        if 'موظف' in user_message:
+            emp_name = re.search(r'موظف\s+(.+?)(?:\s|$)', user_message)
+            if emp_name:
+                emp = emp_name.group(1).strip()
+                filtered = sheets_client.get_transactions_by_employee(emp)
+                if filtered:
+                    await update.message.reply_text(f"📊 المعاملات للموظف {emp}: {len(filtered)} معاملة")
+                else:
+                    await update.message.reply_text(f"لا توجد معاملات للموظف {emp}")
+                return
+        if 'متأخرة' in user_message:
+            delayed = sheets_client.filter_transactions('manager', status='متأخرة')
+            await update.message.reply_text(f"⚠️ عدد المعاملات المتأخرة: {len(delayed)}")
+            return
+
+        # إذا لم يطابق أي من الأوامر السريعة، نستخدم الذكاء الاصطناعي
         logger.info(f"🤖 استعلام ذكي من المدير {user_name}: {user_message[:50]}...")
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         if ai_assistant:
@@ -736,7 +901,9 @@ def api_submit():
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
         domain = request.host
-        edit_link = f"{domain}/transaction/{transaction_id}"
+        edit_link = f"https://{domain}/transaction/{transaction_id}"
+        hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
+
         for idx, header in enumerate(headers):
             if header == 'Timestamp':
                 new_row[idx] = timestamp
@@ -755,9 +922,13 @@ def api_submit():
             elif header == 'ID':
                 new_row[idx] = transaction_id
             elif header == 'الرابط':
-                new_row[idx] = edit_link
+                new_row[idx] = hyperlink_formula
         ws.append_row(new_row)
         logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager (الصف الجديد)")
+
+        # إضافة نسخة إلى شيت القسم
+        if department:
+            sheets_client.append_to_department_sheet(department, new_row, headers)
 
         all_rows = ws.get_all_values()
         logger.info(f"📊 عدد الصفوف بعد الإضافة: {len(all_rows)}")
@@ -772,7 +943,7 @@ def api_submit():
             qr_ws.append_row([transaction_id, "", ""])
             new_row_num = len(qr_ws.get_all_values())
             qr_ws.update_cell(new_row_num, 2, f'=IMAGE("{qr_image_url}")')
-            qr_ws.update_cell(new_row_num, 3, f'=HYPERLINK("{verify_link}", "فتح صفحة التحقق")')
+            qr_ws.update_cell(new_row_num, 3, f'=HYPERLINK("{edit_link}", "تعديل المعاملة")')
             logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في شيت QR مع صيغ")
 
         sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "النظام (API)")
@@ -915,7 +1086,9 @@ def api_transaction(id):
 
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
-                archive_success = sheets_client.archive_transaction(id)
+                # تمرير القسم لأرشفة شيت القسم أيضاً
+                old_dept = old_data.get('القسم', '')
+                archive_success = sheets_client.archive_transaction(id, department_name=old_dept)
                 if archive_success:
                     return jsonify({'success': True, 'message': 'تم الحفظ والمعاملة مؤرشفة'})
                 else:
@@ -976,21 +1149,22 @@ def verify_email_page():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>التحقق من البريد الإلكتروني</title>
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #f5f0ff 0%, #f0f2f5 100%); margin: 0; padding: 20px; }
-            .card { max-width: 400px; margin: 50px auto; background: white; border-radius: 32px; box-shadow: 0 20px 35px -10px rgba(0,0,0,0.1); overflow: hidden; }
-            .header { background: #8b5cf6; color: white; padding: 30px; text-align: center; }
-            .header h1 { margin: 0; font-size: 24px; }
-            .content { padding: 30px; }
-            input { width: 100%; padding: 12px 16px; margin: 8px 0; border: 1px solid #e5e7eb; border-radius: 16px; font-size: 16px; background: #f9fafb; }
-            button { background: #8b5cf6; color: white; border: none; padding: 12px; font-size: 16px; border-radius: 40px; width: 100%; cursor: pointer; margin-top: 15px; }
-            button:hover { background: #7c3aed; transform: translateY(-2px); }
-            .info { background: #f3f4f6; border-radius: 20px; padding: 12px; margin-bottom: 20px; font-size: 13px; text-align: center; color: #4b5563; }
+            body { font-family: 'Inter', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin: 0; padding: 20px; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+            .card { max-width: 420px; width: 100%; background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-radius: 48px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); overflow: hidden; border: 1px solid rgba(255,255,255,0.2); }
+            .header { background: linear-gradient(135deg, #667eea, #764ba2); padding: 32px; text-align: center; color: white; }
+            .header h1 { margin: 0; font-size: 28px; font-weight: 700; }
+            .content { padding: 32px; }
+            input { width: 100%; padding: 14px 18px; margin: 8px 0; border: 1px solid #e5e7eb; border-radius: 32px; font-size: 16px; background: #f9fafb; transition: 0.2s; }
+            input:focus { outline: none; border-color: #8b5cf6; box-shadow: 0 0 0 3px rgba(139,92,246,0.2); }
+            button { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 14px; font-size: 16px; font-weight: 600; border-radius: 40px; width: 100%; cursor: pointer; transition: 0.2s; margin-top: 15px; }
+            button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px -5px rgba(102,126,234,0.4); }
+            .info { background: #f3f4f6; border-radius: 32px; padding: 14px; margin-bottom: 20px; font-size: 13px; text-align: center; color: #4b5563; }
         </style>
     </head>
     <body>
         <div class="card">
             <div class="header">
-                <h1>🔐 التحقق من البريد الإلكتروني</h1>
+                <h1>🔐 التحقق من البريد</h1>
             </div>
             <div class="content">
                 <div class="info">💡 أدخل بريدك الجامعي (@it.jan.ah) للوصول إلى صفحة تعديل المعاملة.</div>
@@ -1011,205 +1185,161 @@ EDIT_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>تعديل المعاملة</title>
+    <title>تعديل المعاملة | نظام التتبع</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
         * { font-family: 'Inter', sans-serif; }
-        .ios-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.3); border-radius: 24px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
-        .ios-input { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 16px; padding: 12px 16px; font-size: 16px; width: 100%; transition: all 0.2s; }
-        .ios-input:focus { border-color: #007aff; outline: none; box-shadow: 0 0 0 3px rgba(0,122,255,0.1); }
-        .ios-select { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 16px; padding: 12px 16px; font-size: 16px; width: 100%; }
-        .label-ios { font-size: 13px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; text-transform: uppercase; letter-spacing: 0.5px; }
-        .timeline-item { border-right: 2px solid #007aff; position: relative; padding-right: 20px; margin-bottom: 24px; }
-        .timeline-dot { width: 12px; height: 12px; background: #007aff; border-radius: 50%; position: absolute; right: -7px; top: 5px; }
-        .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-        .badge-new { background: #e2e3e5; color: #383d41; }
-        .badge-processing { background: #fff3cd; color: #856404; }
-        .badge-completed { background: #d4edda; color: #155724; }
-        .badge-delayed { background: #f8d7da; color: #721c24; }
+        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 24px; }
+        .glass-card { background: rgba(255,255,255,0.95); backdrop-filter: blur(10px); border-radius: 32px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.2); transition: all 0.3s; }
+        .status-badge { display: inline-block; padding: 6px 16px; border-radius: 40px; font-size: 13px; font-weight: 600; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .status-new { background: #e5e7eb; color: #1f2937; }
+        .status-processing { background: #fef3c7; color: #b45309; }
+        .status-completed { background: #d1fae5; color: #065f46; }
+        .status-delayed { background: #fee2e2; color: #991b1b; }
+        .timeline { position: relative; padding-right: 30px; }
+        .timeline-item { position: relative; padding-bottom: 28px; border-right: 2px solid #c4b5fd; margin-right: 12px; }
+        .timeline-dot { position: absolute; right: -9px; top: 5px; width: 14px; height: 14px; background: #8b5cf6; border-radius: 50%; box-shadow: 0 0 0 4px rgba(139,92,246,0.2); }
+        .timeline-time { font-size: 12px; color: #6c757d; margin-bottom: 4px; direction: ltr; text-align: right; }
+        .timeline-action { font-weight: 600; color: #1f2937; margin-bottom: 4px; }
+        .timeline-user { font-size: 12px; color: #9ca3af; }
+        .btn-save { background: linear-gradient(135deg, #667eea, #764ba2); transition: transform 0.2s, box-shadow 0.2s; }
+        .btn-save:hover { transform: translateY(-2px); box-shadow: 0 10px 20px -5px rgba(102,126,234,0.4); }
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+        .info-card { background: #faf5ff; border-radius: 24px; padding: 20px; transition: all 0.2s; border: 1px solid #f3e8ff; }
+        .info-card:hover { transform: translateY(-2px); box-shadow: 0 8px 15px rgba(0,0,0,0.05); }
+        .label { font-size: 12px; font-weight: 600; color: #8b5cf6; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: block; }
+        .value { font-size: 16px; font-weight: 500; color: #1f2937; word-break: break-word; }
+        input, select, textarea { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 16px; padding: 12px 16px; font-size: 15px; width: 100%; transition: 0.2s; }
+        input:focus, select:focus, textarea:focus { border-color: #8b5cf6; outline: none; box-shadow: 0 0 0 3px rgba(139,92,246,0.1); }
+        .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #1f2937; color: white; padding: 12px 24px; border-radius: 40px; font-size: 14px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 50; }
     </style>
 </head>
-<body class="bg-gradient-to-b from-gray-50 to-gray-100 p-4">
-    <div class="max-w-4xl mx-auto">
-        <div class="ios-card rounded-2xl p-4 mb-4 shadow-sm">
-            <h1 class="text-xl font-semibold">🔍 تتبع المعاملة <span id="transaction-id" class="text-blue-600"></span></h1>
+<body>
+    <div class="max-w-5xl mx-auto">
+        <div class="glass-card p-6 mb-6 text-center md:text-right">
+            <h1 class="text-2xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">📝 تعديل المعاملة</h1>
+            <p class="text-gray-500 text-sm mt-1">رقم المعاملة: <span id="transaction-id" class="font-mono text-purple-600"></span></p>
         </div>
-
-        <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📋 <span>معلومات أساسية</span></h2>
-            <div id="readonly-fields" class="grid grid-cols-1 md:grid-cols-2 gap-5"></div>
+        <div class="glass-card p-6 mb-6">
+            <h2 class="text-lg font-semibold flex items-center gap-2 mb-5 text-purple-700">📋 <span>معلومات أساسية</span></h2>
+            <div id="readonly-fields" class="info-grid"></div>
         </div>
-
-        <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">✏️ <span>تحديث البيانات</span></h2>
+        <div class="glass-card p-6 mb-6">
+            <h2 class="text-lg font-semibold flex items-center gap-2 mb-5 text-purple-700">✏️ <span>تحديث البيانات</span></h2>
             <form id="editForm" class="space-y-5">
-                <div id="editable-fields" class="grid grid-cols-1 md:grid-cols-2 gap-5"></div>
-                <button type="submit" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-4 rounded-xl transition shadow-sm">💾 حفظ التغييرات</button>
+                <div id="editable-fields" class="info-grid"></div>
+                <button type="submit" class="btn-save w-full text-white font-semibold py-3 rounded-xl transition shadow-md">💾 حفظ التغييرات</button>
             </form>
         </div>
-
-        <div class="ios-card rounded-2xl p-6 mb-4 shadow-sm">
-            <h2 class="text-lg font-semibold mb-4 flex items-center gap-2">📜 <span>سجل الحركات</span></h2>
-            <div id="history-timeline" class="space-y-2"></div>
+        <div class="glass-card p-6 mb-6">
+            <h2 class="text-lg font-semibold flex items-center gap-2 mb-5 text-purple-700">📜 <span>سجل الحركات</span></h2>
+            <div id="history-timeline" class="timeline"></div>
         </div>
-
-        <div id="message" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg opacity-0 transition-opacity z-50"></div>
     </div>
-
+    <div id="message" class="toast"></div>
     <script>
         const id = window.location.pathname.split('/').pop();
         document.getElementById('transaction-id').innerText = id;
-
         function showMessage(text, isError = false) {
             const msgDiv = document.getElementById('message');
             msgDiv.innerText = text;
-            msgDiv.classList.remove('opacity-0');
-            msgDiv.classList.add('opacity-100');
-            if (isError) msgDiv.classList.add('bg-red-600');
-            else msgDiv.classList.remove('bg-red-600');
-            setTimeout(() => msgDiv.classList.remove('opacity-100'), 3000);
+            msgDiv.style.background = isError ? '#dc2626' : '#1f2937';
+            msgDiv.style.opacity = '1';
+            setTimeout(() => msgDiv.style.opacity = '0', 3000);
         }
-
+        function formatDateTime(dateStr) {
+            if (!dateStr) return '—';
+            try {
+                let d = new Date(dateStr);
+                if (isNaN(d.getTime())) d = new Date(dateStr.replace(' ', 'T'));
+                if (isNaN(d.getTime())) return dateStr;
+                return d.toLocaleString('en-GB', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' }).replace(',', '');
+            } catch(e) { return dateStr; }
+        }
         Promise.all([
             fetch(`/api/transaction/${id}`).then(r => r.json()),
             fetch('/api/headers').then(r => r.json())
         ]).then(([data, headers]) => {
-            const readonlyKeys = [
-                'Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف',
-                'الوظيفة', 'القسم', 'نوع المعاملة', 'المرافقات', 'ID'
-            ];
+            const readonlyKeys = ['Timestamp', 'اسم صاحب المعاملة الثلاثي', 'رقم الهاتف', 'الوظيفة', 'القسم', 'نوع المعاملة', 'المرافقات', 'ID'];
             const excludedKeys = ['LOG_JSON', 'الرابط', 'عدد التعديلات', 'البريد الإلكتروني الموظف'];
-
             const rc = document.getElementById('readonly-fields');
             rc.innerHTML = '';
             readonlyKeys.forEach(key => {
                 if (data[key] !== undefined) {
-                    const value = data[key] || '—';
+                    let value = data[key] || '—';
                     let display = value;
                     if (key === 'المرافقات' && value.startsWith('http')) {
-                        display = `<a href="${value}" target="_blank" class="text-blue-500 underline">📎 فتح المرفق</a>`;
+                        display = `<a href="${value}" target="_blank" class="text-blue-600 underline">📎 فتح المرفق</a>`;
+                    } else if (key === 'Timestamp') {
+                        display = formatDateTime(value);
                     }
-                    rc.innerHTML += `
-                        <div class="bg-gray-50/80 p-4 rounded-xl">
-                            <span class="label-ios">${key}</span>
-                            <div class="text-gray-900 mt-1 font-medium">${display}</div>
-                        </div>
-                    `;
+                    rc.innerHTML += `<div class="info-card"><div class="label">${key}</div><div class="value">${display}</div></div>`;
                 }
             });
-
-            const editableKeys = headers.filter(key => 
-                !readonlyKeys.includes(key) && !excludedKeys.includes(key)
-            );
+            const editableKeys = headers.filter(key => !readonlyKeys.includes(key) && !excludedKeys.includes(key));
             const ec = document.getElementById('editable-fields');
             ec.innerHTML = '';
-
             editableKeys.forEach(key => {
                 let inputType = 'text';
                 let options = '';
-
                 if (key.includes('تاريخ')) {
                     inputType = 'date';
                 } else if (key === 'الحالة') {
                     inputType = 'select';
-                    options = `
-                        <select name="${key}" class="ios-select" onchange="updateStatusColor(this)">
-                            <option value="جديد" ${data[key] === 'جديد' ? 'selected' : ''}>جديد</option>
-                            <option value="قيد المعالجة" ${data[key] === 'قيد المعالجة' ? 'selected' : ''}>قيد المعالجة</option>
-                            <option value="مكتملة" ${data[key] === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
-                            <option value="متأخرة" ${data[key] === 'متأخرة' ? 'selected' : ''}>متأخرة</option>
-                        </select>
-                    `;
+                    options = `<select name="${key}" class="w-full p-3 border rounded-xl bg-gray-50 focus:border-purple-500">
+                        <option value="جديد" ${data[key] === 'جديد' ? 'selected' : ''}>جديد</option>
+                        <option value="قيد المعالجة" ${data[key] === 'قيد المعالجة' ? 'selected' : ''}>قيد المعالجة</option>
+                        <option value="مكتملة" ${data[key] === 'مكتملة' ? 'selected' : ''}>مكتملة</option>
+                        <option value="متأخرة" ${data[key] === 'متأخرة' ? 'selected' : ''}>متأخرة</option>
+                    </select>`;
                 } else if (key === 'التأخير') {
                     inputType = 'select';
-                    options = `
-                        <select name="${key}" class="ios-select">
-                            <option value="لا" ${data[key] !== 'نعم' ? 'selected' : ''}>لا</option>
-                            <option value="نعم" ${data[key] === 'نعم' ? 'selected' : ''}>نعم</option>
-                        </select>
-                    `;
+                    options = `<select name="${key}" class="w-full p-3 border rounded-xl bg-gray-50">
+                        <option value="لا" ${data[key] !== 'نعم' ? 'selected' : ''}>لا</option>
+                        <option value="نعم" ${data[key] === 'نعم' ? 'selected' : ''}>نعم</option>
+                    </select>`;
                 } else if (key === 'الأولوية') {
                     inputType = 'select';
-                    options = `
-                        <select name="${key}" class="ios-select">
-                            <option value="عادية" ${data[key] !== 'مستعجلة' ? 'selected' : ''}>عادية</option>
-                            <option value="مستعجلة" ${data[key] === 'مستعجلة' ? 'selected' : ''}>مستعجلة</option>
-                        </select>
-                    `;
+                    options = `<select name="${key}" class="w-full p-3 border rounded-xl bg-gray-50">
+                        <option value="عادية" ${data[key] !== 'مستعجلة' ? 'selected' : ''}>عادية</option>
+                        <option value="مستعجلة" ${data[key] === 'مستعجلة' ? 'selected' : ''}>مستعجلة</option>
+                    </select>`;
                 }
-
                 const currentValue = data[key] || '';
                 if (inputType === 'select') {
-                    ec.innerHTML += `
-                        <div>
-                            <label class="label-ios">${key}</label>
-                            ${options}
-                        </div>
-                    `;
+                    ec.innerHTML += `<div><div class="label">${key}</div>${options}</div>`;
                 } else if (inputType === 'date') {
-                    ec.innerHTML += `
-                        <div>
-                            <label class="label-ios">${key}</label>
-                            <input type="date" name="${key}" value="${currentValue.split('T')[0] || ''}" class="ios-input">
-                        </div>
-                    `;
+                    let val = currentValue.split('T')[0] || '';
+                    ec.innerHTML += `<div><div class="label">${key}</div><input type="date" name="${key}" value="${val}" class="w-full p-3 border rounded-xl"></div>`;
                 } else {
-                    ec.innerHTML += `
-                        <div>
-                            <label class="label-ios">${key}</label>
-                            <input type="text" name="${key}" value="${currentValue}" class="ios-input">
-                        </div>
-                    `;
+                    ec.innerHTML += `<div><div class="label">${key}</div><input type="text" name="${key}" value="${currentValue}" class="w-full p-3 border rounded-xl"></div>`;
                 }
             });
         }).catch(() => {
             document.body.innerHTML = '<div class="text-center text-red-500 p-10">❌ المعاملة غير موجودة أو حدث خطأ في تحميل البيانات</div>';
         });
-
-        function updateStatusColor(select) {
-            select.classList.remove('badge-new', 'badge-processing', 'badge-completed', 'badge-delayed');
-            if (select.value === 'جديد') select.classList.add('badge-new');
-            else if (select.value === 'قيد المعالجة') select.classList.add('badge-processing');
-            else if (select.value === 'مكتملة') select.classList.add('badge-completed');
-            else if (select.value === 'متأخرة') select.classList.add('badge-delayed');
-        }
-
         document.getElementById('editForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const formData = new FormData(e.target);
             const updates = Object.fromEntries(formData.entries());
-            const res = await fetch(`/api/transaction/${id}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updates)
-            });
+            const res = await fetch(`/api/transaction/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) });
             const result = await res.json();
             if (result.success) {
-                showMessage('✅ تم الحفظ');
+                showMessage('✅ تم الحفظ بنجاح');
                 loadHistory();
             } else {
-                showMessage('❌ فشل', true);
+                showMessage('❌ فشل الحفظ', true);
             }
         });
-
         function loadHistory() {
             fetch(`/api/history/${id}`).then(r => r.json()).then(h => {
                 const t = document.getElementById('history-timeline');
-                if (h.length === 0) {
-                    t.innerHTML = '<p class="text-gray-500 text-center py-8">لا يوجد سجل</p>';
-                    return;
-                }
+                if (h.length === 0) { t.innerHTML = '<p class="text-gray-500 text-center py-8">لا يوجد سجل</p>'; return; }
                 let html = '';
                 h.forEach(i => {
-                    html += `
-                        <div class="timeline-item">
-                            <span class="timeline-dot"></span>
-                            <div class="timeline-time">${i.time}</div>
-                            <div class="timeline-action">${i.action}</div>
-                            <div class="timeline-user">بواسطة: ${i.user}</div>
-                        </div>
-                    `;
+                    let timeFormatted = formatDateTime(i.time);
+                    html += `<div class="timeline-item"><span class="timeline-dot"></span><div class="timeline-time">${timeFormatted}</div><div class="timeline-action">${i.action}</div><div class="timeline-user">بواسطة: ${i.user}</div></div>`;
                 });
                 t.innerHTML = html;
             });
@@ -1235,25 +1365,43 @@ INDEX_HTML = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>المعاملات - لوحة التحكم</title>
+    <title>لوحة التحكم - المعاملات</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 40px; font-size: 12px; font-weight: 600; }
+        .status-new { background: #e5e7eb; color: #1f2937; }
+        .status-processing { background: #fef3c7; color: #b45309; }
+        .status-completed { background: #d1fae5; color: #065f46; }
+        .status-delayed { background: #fee2e2; color: #991b1b; }
+        table { border-collapse: separate; border-spacing: 0 8px; }
+        td, th { padding: 12px 16px; }
+        tr { background: white; border-radius: 16px; transition: 0.2s; }
+        tr:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,0.1); }
+        .btn-edit { background: linear-gradient(135deg, #8b5cf6, #6366f1); padding: 6px 14px; border-radius: 40px; color: white; font-size: 13px; transition: 0.2s; }
+        .btn-edit:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(139,92,246,0.4); }
+    </style>
 </head>
-<body class="bg-gray-100 p-4">
+<body class="p-4">
     <div class="max-w-6xl mx-auto">
-        <h1 class="text-2xl font-bold mb-4">📋 جميع المعاملات (المدير)</h1>
-        <div class="mb-4">
-            <input type="text" id="searchInput" placeholder="🔍 ابحث بـ ID أو الاسم أو الحالة..." 
-                   class="w-full p-3 border border-gray-300 rounded-xl text-right">
+        <div class="bg-white/90 backdrop-blur rounded-2xl p-6 mb-6 shadow-xl">
+            <h1 class="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">📋 جميع المعاملات</h1>
+            <p class="text-gray-500 mt-1">لوحة تحكم المدير</p>
         </div>
-        <div class="bg-white rounded-xl shadow overflow-x-auto">
+        <div class="mb-4">
+            <input type="text" id="searchInput" placeholder="🔍 ابحث بـ ID أو الاسم أو الحالة..." class="w-full p-3 border-0 rounded-2xl shadow-md focus:ring-2 focus:ring-purple-400 bg-white/90 backdrop-blur">
+        </div>
+        <div class="overflow-x-auto">
             <table class="min-w-full">
-                <thead class="bg-gray-50">
-                    <tr>
-                        <th class="px-4 py-2 text-right">ID</th>
-                        <th class="px-4 py-2 text-right">الاسم</th>
-                        <th class="px-4 py-2 text-right">الحالة</th>
-                        <th class="px-4 py-2 text-right">الموظف</th>
-                        <th class="px-4 py-2 text-right"></th>
+                <thead>
+                    <tr class="bg-white/80 backdrop-blur shadow-sm rounded-2xl">
+                        <th class="text-right px-4 py-3 text-purple-800">ID</th>
+                        <th class="text-right px-4 py-3 text-purple-800">الاسم</th>
+                        <th class="text-right px-4 py-3 text-purple-800">الحالة</th>
+                        <th class="text-right px-4 py-3 text-purple-800">الموظف</th>
+                        <th class="text-right px-4 py-3 text-purple-800">القسم</th>
+                        <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
+                        <th class="text-right px-4 py-3 text-purple-800"></th>
                     </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
@@ -1261,16 +1409,26 @@ INDEX_HTML = """<!DOCTYPE html>
         </div>
     </div>
     <script>
+        function formatDate(dateStr) {
+            if (!dateStr) return '—';
+            try {
+                let d = new Date(dateStr);
+                if (isNaN(d.getTime())) return dateStr;
+                return d.toLocaleString('en-GB', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+            } catch(e) { return dateStr; }
+        }
+        function getStatusClass(status) {
+            if (status === 'جديد') return 'status-new';
+            if (status === 'قيد المعالجة') return 'status-processing';
+            if (status === 'مكتملة') return 'status-completed';
+            if (status === 'متأخرة') return 'status-delayed';
+            return '';
+        }
         fetch('/api/transactions').then(r=>r.json()).then(data => {
             const tbody = document.getElementById('transactions');
             data.forEach(t => {
-                const row = `<tr class="border-t">
-                    <td class="px-4 py-2">${t.id}</td>
-                    <td class="px-4 py-2">${t.name}</td>
-                    <td class="px-4 py-2">${t.status}</td>
-                    <td class="px-4 py-2">${t.employee}</td>
-                    <td class="px-4 py-2"><a href="/transaction/${t.id}" class="text-blue-500 underline">✏️ تعديل</a></td>
-                  </tr>`;
+                const statusClass = getStatusClass(t.status);
+                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></td><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></tr>`;
                 tbody.innerHTML += row;
             });
         });
