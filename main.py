@@ -232,6 +232,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg += "\n📌 *ملاحظة:* بعد اختيار الخدمة، سيُطلب منك إدخال رقم المعاملة (ID) أو كلمة البحث."
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.debug(f"🔘 تم الضغط على زر: {query.data}")
@@ -290,12 +291,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if transaction_id:
             base_url = request.host_url.rstrip('/')
-            verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
-            qr_base64 = QRGenerator.generate_qr(verify_link)
+            edit_link = f"{base_url}/transaction/{transaction_id}"
+            qr_base64 = QRGenerator.generate_qr(edit_link)
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=base64.b64decode(qr_base64),
-                caption=instruction_text + f"\n\n🔗 *رابط التحقق:*\n`{verify_link}`\n\nقم بمسح الرمز أو فتح الرابط للدخول إلى صفحة التعديل.",
+                caption=instruction_text + f"\n\n🔗 *رابط التعديل:*\n`{edit_link}`\n\nقم بمسح الرمز أو فتح الرابط للدخول إلى صفحة تعديل المعاملة.",
                 parse_mode='Markdown'
             )
             await query.message.delete()
@@ -560,12 +561,12 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if transaction_id:
         base_url = request.host_url.rstrip('/')
-        verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
-        qr_base64 = QRGenerator.generate_qr(verify_link)
+        edit_link = f"{base_url}/transaction/{transaction_id}"
+        qr_base64 = QRGenerator.generate_qr(edit_link)
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=base64.b64decode(qr_base64),
-            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي (ينتهي بـ @it.jan.ah)\n3️⃣ سيتم توجيهك إلى صفحة التعديل.\n\n🔗 {verify_link}",
+            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي (ينتهي بـ @it.jan.ah)\n3️⃣ سيتم توجيهك إلى صفحة تعديل المعاملة.\n\n🔗 {edit_link}",
             parse_mode='Markdown'
         )
     else:
@@ -768,6 +769,7 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     response = await ai_assistant.get_response(user_message, user_id, user_name)
     await update.message.reply_text(response)
+
 # ------------------ إعداد البوت وحلقة الأحداث ------------------
 bot_app = None
 background_loop = None
@@ -948,9 +950,7 @@ def api_submit():
         def update_qr():
             qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
             if qr_ws:
-                verify_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
-                qr_image_url = f"{base_url}/qr_image/{transaction_id}"
-                qr_ws.append_row([transaction_id, f'=IMAGE("{qr_image_url}")', f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'])
+                qr_ws.append_row([transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'])
                 logger.debug(f"✅ تم تحديث QR للمعاملة {transaction_id}")
         rate_limit_write()
         executor.submit(update_qr)
@@ -1472,8 +1472,8 @@ def index():
 @app.route('/qr/<id>')
 def qr_page(id):
     base_url = request.host_url.rstrip('/')
-    view_link = f"{base_url}/view/{id}"
-    qr_base64 = QRGenerator.generate_qr(view_link)
+    edit_link = f"{base_url}/transaction/{id}"
+    qr_base64 = QRGenerator.generate_qr(edit_link)
     html = f"""
     <!DOCTYPE html>
     <html dir="rtl">
@@ -1500,7 +1500,7 @@ def qr_page(id):
             <div class="instruction">
                 <p><strong>🔹 تعليمات التتبع:</strong></p>
                 <p>1️⃣ افتح كاميرا هاتفك وامسح الرمز.</p>
-                <p>2️⃣ سيتم نقلك إلى صفحة تفاصيل المعاملة.</p>
+                <p>2️⃣ سيتم نقلك إلى صفحة تعديل المعاملة.</p>
                 <p>3️⃣ يمكنك متابعة المعاملة عبر البوت:</p>
                 <a href="https://t.me/{Config.BOT_USERNAME}?start={id}" class="btn btn-telegram">📱 فتح البوت</a>
                 <p style="margin-top: 15px; font-size: 12px; color: #6c757d;">⚠️ احتفظ بهذا الرقم لمتابعة المعاملة: <strong>{id}</strong></p>
@@ -1514,8 +1514,8 @@ def qr_page(id):
 @app.route('/qr_image/<id>')
 def qr_image(id):
     base_url = request.host_url.rstrip('/')
-    view_link = f"{base_url}/view/{id}"
-    qr_base64 = QRGenerator.generate_qr(view_link)
+    edit_link = f"{base_url}/transaction/{id}"
+    qr_base64 = QRGenerator.generate_qr(edit_link)
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
 
