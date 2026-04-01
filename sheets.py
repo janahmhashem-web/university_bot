@@ -11,7 +11,6 @@ import tempfile
 import time
 import random
 import re
-from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +42,7 @@ class GoogleSheetsClient:
 
     def _init_sheets(self):
         from config import Config
+
         sheets_required = {
             Config.SHEET_MANAGER: [
                 "Timestamp", "اسم صاحب المعاملة الثلاثي", "رقم الهاتف",
@@ -114,7 +114,6 @@ class GoogleSheetsClient:
 
     # ================== الدوال السريعة ==================
     def get_headers_cached(self):
-        """تخزين مؤقت لرؤوس الأعمدة (تجدد كل 5 دقائق)"""
         if (self._headers_cache is None or 
             (datetime.now() - self._headers_cache_time).seconds > 300):
             ws = self.get_worksheet('manager')
@@ -168,14 +167,13 @@ class GoogleSheetsClient:
                 return row
         return None
 
-    # ================== دوال إدارة شيتات الأقسام (مع تخزين مؤقت) ==================
+    # ================== دوال إدارة شيتات الأقسام ==================
     def _sanitize_sheet_name(self, name):
         name = re.sub(r'[\\/*?:\[\]]', '_', name)
         name = name[:100]
         return name.strip()
 
     def get_or_create_department_sheet_cached(self, department_name):
-        """نفس get_or_create_department_sheet مع تخزين مؤقت"""
         sheet_name = self._sanitize_sheet_name(department_name)
         if sheet_name in self._department_sheets_cache:
             return self._department_sheets_cache[sheet_name]
@@ -216,6 +214,41 @@ class GoogleSheetsClient:
             except Exception as e:
                 logger.error(f"فشل إضافة الصف إلى شيت القسم {department_name}: {e}")
         return False
+
+    def update_department_sheet(self, department_name, transaction_id, row_data, headers):
+        """تحديث صف المعاملة في شيت القسم بأحدث البيانات"""
+        ws = self.get_or_create_department_sheet_cached(department_name)
+        if not ws:
+            return False
+
+        all_rows = ws.get_all_values()
+        ws_headers = ws.row_values(1)
+        try:
+            id_col = ws_headers.index('ID') + 1
+        except ValueError:
+            return False
+
+        row_num = None
+        for i, row in enumerate(all_rows):
+            if i == 0:
+                continue
+            if len(row) > id_col - 1 and str(row[id_col - 1]) == str(transaction_id):
+                row_num = i + 1
+                break
+
+        if row_num:
+            # تحديث كل خلية في الصف الموجود
+            for col, header in enumerate(ws_headers, 1):
+                if header in headers:
+                    idx = headers.index(header)
+                    ws.update_cell(row_num, col, row_data[idx])
+            logger.info(f"✅ تم تحديث المعاملة {transaction_id} في شيت القسم {department_name}")
+            return True
+        else:
+            # إذا لم توجد المعاملة في شيت القسم (نادر)، نضيفها
+            ws.append_row(row_data)
+            logger.info(f"✅ تم إضافة المعاملة {transaction_id} إلى شيت القسم {department_name}")
+            return True
 
     def get_or_create_department_archive_cached(self, department_name):
         archive_name = f"أرشيف_{self._sanitize_sheet_name(department_name)}"
