@@ -36,13 +36,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------ إعدادات الأداء ------------------
-MAX_WORKERS = 10                     # عدد العاملين المتوازيين
-WRITE_RATE_LIMIT = 250               # الحد الأقصى للطلبات في الدقيقة
+MAX_WORKERS = 10
+WRITE_RATE_LIMIT = 250
 RATE_WINDOW = 60
 write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
 
 def rate_limit_write():
-    """التحكم في معدل طلبات الكتابة لتجنب تجاوز حدود Google Sheets API"""
     while len(write_timestamps) >= WRITE_RATE_LIMIT:
         oldest = write_timestamps[0]
         if time.time() - oldest < RATE_WINDOW:
@@ -233,7 +232,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         msg += "\n📌 *ملاحظة:* بعد اختيار الخدمة، سيُطلب منك إدخال رقم المعاملة (ID) أو كلمة البحث."
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
-
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     logger.debug(f"🔘 تم الضغط على زر: {query.data}")
@@ -642,7 +640,6 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.args = [text]
             await analyze(update, context)
         elif awaiting == 'adv_search':
-            # البحث المتقدم
             criteria = {}
             parts = text.split(',')
             for part in parts:
@@ -691,7 +688,6 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name or ""
 
     if is_admin:
-        # ردود سريعة للمدير
         msg_lower = user_message.lower()
         if any(word in msg_lower for word in ['جميع المعاملات', 'قائمة المعاملات', 'كل المعاملات', 'عرض الكل']):
             response = get_all_transactions_list()
@@ -731,7 +727,6 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("الرجاء إدخال رقم المعاملة بشكل صحيح: /analyze MUT-123456...")
                 return
 
-        # استعلامات ذكية
         if 'قسم' in user_message:
             dept_name = re.search(r'قسم\s+(.+?)(?:\s|$)', user_message)
             if dept_name:
@@ -757,7 +752,6 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⚠️ عدد المعاملات المتأخرة: {len(delayed)}")
             return
 
-        # استخدام AI
         logger.info(f"🤖 استعلام ذكي من المدير {user_name}: {user_message[:50]}...")
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         if ai_assistant:
@@ -774,7 +768,6 @@ async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     response = await ai_assistant.get_response(user_message, user_id, user_name)
     await update.message.reply_text(response)
-
 # ------------------ إعداد البوت وحلقة الأحداث ------------------
 bot_app = None
 background_loop = None
@@ -942,7 +935,6 @@ def api_submit():
             elif header == 'الرابط':
                 new_row[idx] = hyperlink_formula
 
-        # الكتابة إلى manager (متزامنة)
         ws.append_row(new_row)
         logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager")
 
@@ -1062,6 +1054,12 @@ def api_transaction(id):
             new_row[idx] = value
 
         ws.append_row(new_row)
+
+        # تحديث شيت القسم
+        old_dept = old_data.get('القسم', '')
+        if old_dept:
+            rate_limit_write()
+            executor.submit(sheets_client.update_department_sheet, old_dept, id, new_row, headers)
 
         # إنشاء رسالة مفصلة بالتغييرات
         changes = []
