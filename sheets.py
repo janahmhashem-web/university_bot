@@ -216,7 +216,6 @@ class GoogleSheetsClient:
         return False
 
     def update_department_sheet(self, department_name, transaction_id, row_data, headers):
-        """تحديث صف المعاملة في شيت القسم بأحدث البيانات"""
         ws = self.get_or_create_department_sheet_cached(department_name)
         if not ws:
             return False
@@ -230,9 +229,8 @@ class GoogleSheetsClient:
 
         row_num = None
         for i, row in enumerate(all_rows):
-            if i == 0:
-                continue
-            if len(row) > id_col - 1 and str(row[id_col - 1]) == str(transaction_id):
+            if i == 0: continue
+            if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
                 row_num = i + 1
                 break
 
