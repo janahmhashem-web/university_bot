@@ -1169,7 +1169,7 @@ def verify_email_page():
         if not email:
             return "الرجاء إدخال البريد الإلكتروني", 400
         if not email.endswith('@it.jan.ah'):
-            return f"🚫 غير مصرح: البريد الإلكتروني يجب أن ينتهي بـ @it.jan.ah", 403
+            return f"🚫غير مصرح: البريد الإلكتروني ", 403
 
         # جلب التوكن المخزن (إن وجد)
         token = sheets_client.get_direct_token(transaction_id)
@@ -1208,7 +1208,7 @@ def verify_email_page():
                 <h1>🔐 التحقق من البريد</h1>
             </div>
             <div class="content">
-                <div class="info">💡 أدخل بريدك الجامعي (@it.jan.ah) للوصول إلى صفحة تعديل المعاملة.</div>
+                <div class="info">💡 أدخل بريدك الجامعي للوصول إلى صفحة تعديل المعاملة.</div>
                 <form method="POST">
                     <input type="email" name="email" placeholder="example@it.jan.ah" required>
                     <button type="submit">تحقق</button>
@@ -1598,11 +1598,11 @@ def register_transaction():
                     <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
+                            <input type="text" id="name" name="name" required placeholder="اكتب">
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
+                            <input type="text" id="phone" name="phone" required placeholder="اكتب">
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
