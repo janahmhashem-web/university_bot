@@ -40,6 +40,22 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
+    # ================== دالة مساعدة للإدراج الآمن ==================
+    def safe_append_row(self, worksheet, row_data):
+        """
+        إضافة صف جديد بشكل مضمون دون مشاكل merged cells أو صيغ.
+        تستخدم insert_row بدلاً من append_row.
+        """
+        try:
+            all_values = worksheet.get_all_values()
+            next_row = len(all_values) + 1
+            worksheet.insert_row(row_data, next_row)
+            logger.debug(f"✅ تم إدراج صف جديد في الصف {next_row}")
+            return True
+        except Exception as e:
+            logger.error(f"❌ فشل إدراج الصف: {e}")
+            return False
+
     def _init_sheets(self):
         from config import Config
 
@@ -208,7 +224,7 @@ class GoogleSheetsClient:
         ws = self.get_or_create_department_sheet_cached(department_name)
         if ws:
             try:
-                ws.append_row(row_data)
+                self.safe_append_row(ws, row_data)
                 logger.debug(f"✅ تم إضافة المعاملة إلى شيت القسم: {department_name}")
                 return True
             except Exception as e:
@@ -242,7 +258,7 @@ class GoogleSheetsClient:
             logger.info(f"✅ تم تحديث المعاملة {transaction_id} في شيت القسم {department_name}")
             return True
         else:
-            ws.append_row(row_data)
+            self.safe_append_row(ws, row_data)
             logger.info(f"✅ تم إضافة المعاملة {transaction_id} إلى شيت القسم {department_name}")
             return True
 
@@ -296,7 +312,7 @@ class GoogleSheetsClient:
                 if 'تاريخ_الأرشفة' in headers_archive:
                     idx = headers_archive.index('تاريخ_الأرشفة')
                     row_data_with_archive[idx] = archive_time
-                archive_sheet.append_row(row_data_with_archive)
+                self.safe_append_row(archive_sheet, row_data_with_archive)
                 return True
             except Exception as e:
                 logger.error(f"فشل إضافة المعاملة إلى أرشيف القسم {department_name}: {e}")
@@ -309,7 +325,7 @@ class GoogleSheetsClient:
             if ws:
                 now = datetime.now()
                 timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-                ws.append_row([timestamp, transaction_id, action, user])
+                self.safe_append_row(ws, [timestamp, transaction_id, action, user])
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
@@ -321,7 +337,7 @@ class GoogleSheetsClient:
                 return None
             token = uuid.uuid4().hex
             expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
-            ws.append_row([token, transaction_id, email, expires_at])
+            self.safe_append_row(ws, [token, transaction_id, email, expires_at])
             return token
         except Exception as e:
             logger.error(f"فشل توليد رمز الوصول: {e}")
@@ -366,20 +382,14 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
 
-    # ================== دوال الرموز المباشرة (للاستخدام مع البوت والصفحات) ==================
+    # ================== دوال الرموز المباشرة ==================
     def get_direct_token(self, transaction_id, expiry_minutes=43200):
-        """
-        توليد رمز وصول مباشر (صلاحية طويلة) للمعاملة، دون الحاجة إلى بريد إلكتروني.
-        يستخدم لإنشاء روابط تعديل مباشرة للمستخدمين.
-        - expiry_minutes: مدة صلاحية التوكن بالدقائق (افتراضي 43200 دقيقة = 30 يوم)
-        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
                 logger.error("ورقة access_tokens غير موجودة")
                 return None
 
-            # البحث عن توكن سابق لنفس المعاملة وإعادته إذا كان صالحاً
             records = ws.get_all_records()
             now = datetime.now()
             for row in records:
@@ -394,14 +404,11 @@ class GoogleSheetsClient:
                             except ValueError:
                                 continue
                         if expires_at > now:
-                            # التوكن لا يزال صالحاً، نعيده
                             return row.get('token')
-                    # إذا كان منتهياً، نستمر لإنشاء جديد (سيتم إضافة صف جديد)
 
-            # إنشاء توكن جديد
             token = uuid.uuid4().hex
             expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
-            ws.append_row([token, transaction_id, "direct@system.com", expires_at])
+            self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at])
             logger.info(f"✅ تم توليد رمز مباشر للمعاملة {transaction_id} ينتهي بعد {expiry_minutes} دقيقة")
             return token
         except Exception as e:
@@ -409,10 +416,6 @@ class GoogleSheetsClient:
             return None
 
     def verify_direct_token(self, token, transaction_id):
-        """
-        التحقق من صحة رمز الوصول المباشر (دون التحقق من البريد).
-        يعيد True إذا كان التوكن صالحاً وغير منتهي الصلاحية.
-        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
@@ -460,7 +463,7 @@ class GoogleSheetsClient:
                 return False
             headers = ws_archive_manager.row_values(1)
             new_row = [latest_data.get(header, '') for header in headers]
-            ws_archive_manager.append_row(new_row)
+            self.safe_append_row(ws_archive_manager, new_row)
 
             # 2. حذف من manager
             all_rows = ws_manager.get_all_values()
@@ -496,7 +499,7 @@ class GoogleSheetsClient:
                     for hist in history_rows:
                         hist['تاريخ_الأرشفة'] = archive_time
                         arch_row = [hist.get(header, '') for header in arch_headers]
-                        ws_archive_history.append_row(arch_row)
+                        self.safe_append_row(ws_archive_history, arch_row)
                     rows_to_delete = []
                     for i, r in enumerate(records):
                         if str(r.get('ID')) == str(transaction_id):
