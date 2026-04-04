@@ -945,9 +945,9 @@ def api_submit():
             elif header == 'الرابط':
                 new_row[idx] = hyperlink_formula
 
-        # ✅ استخدام insert_row بدلاً من append_row
+        # ✅ استخدام insert_row مع USER_ENTERED
         next_row = len(ws.get_all_values()) + 1
-        ws.insert_row(new_row, next_row)
+        ws.insert_row(new_row, next_row, value_input_option='USER_ENTERED')
         logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في الصف {next_row} من ورقة manager")
 
         # تحديث العداد العالمي
@@ -969,7 +969,7 @@ def api_submit():
                     transaction_id,
                     f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
                     hyperlink_formula
-                ], next_row_qr)
+                ], next_row_qr, value_input_option='USER_ENTERED')
                 logger.debug(f"✅ تم تحديث QR للمعاملة {transaction_id}")
         rate_limit_write()
         executor.submit(update_qr)
@@ -1072,9 +1072,9 @@ def api_transaction(id):
                 value = current_count + 1
             new_row[idx] = value
 
-        # ✅ استخدام insert_row بدلاً من append_row
+        # ✅ استخدام insert_row مع USER_ENTERED
         next_row = len(ws.get_all_values()) + 1
-        ws.insert_row(new_row, next_row)
+        ws.insert_row(new_row, next_row, value_input_option='USER_ENTERED')
         logger.info(f"✅ تم إضافة سجل تحديث للمعاملة {id} في الصف {next_row}")
 
         # تحديث شيت القسم
@@ -1441,7 +1441,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                    </table>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -1961,7 +1961,7 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
                 transaction_id,
                 f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
                 hyperlink_formula
-            ], next_row_qr)
+            ], next_row_qr, value_input_option='USER_ENTERED')
             logger.debug(f"✅ تم إضافة QR للمعاملة {transaction_id}")
 
         customer_email = new_row.get('البريد الإلكتروني')
@@ -1990,7 +1990,7 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
                 transaction_id,
                 "تم إنشاء المعاملة",
                 "النظام (API)"
-            ], next_row_history)
+            ], next_row_history, value_input_option='USER_ENTERED')
             logger.debug(f"✅ تم إضافة history للمعاملة {transaction_id}")
     except Exception as e:
         logger.error(f"❌ خطأ في معالجة المعاملة {transaction_id}: {e}", exc_info=True)
