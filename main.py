@@ -945,12 +945,14 @@ def api_submit():
             elif header == 'الرابط':
                 new_row[idx] = hyperlink_formula
 
-        ws.append_row(new_row)
-        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في ورقة manager")
+        # ✅ استخدام insert_row بدلاً من append_row
+        next_row = len(ws.get_all_values()) + 1
+        ws.insert_row(new_row, next_row)
+        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في الصف {next_row} من ورقة manager")
 
-        # تحديث العداد العالمي لتجنب إعادة معالجة هذا الصف
+        # تحديث العداد العالمي
         global last_row_count
-        last_row_count = len(ws.get_all_records())
+        last_row_count = len(ws.get_all_values())  # أسرع وأدق
 
         # إضافة إلى شيت القسم (غير متزامن)
         if department:
@@ -962,11 +964,12 @@ def api_submit():
         def update_qr():
             qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
             if qr_ws:
-                qr_ws.append_row([
+                next_row_qr = len(qr_ws.get_all_values()) + 1
+                qr_ws.insert_row([
                     transaction_id,
                     f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
                     hyperlink_formula
-                ])
+                ], next_row_qr)
                 logger.debug(f"✅ تم تحديث QR للمعاملة {transaction_id}")
         rate_limit_write()
         executor.submit(update_qr)
@@ -1069,7 +1072,10 @@ def api_transaction(id):
                 value = current_count + 1
             new_row[idx] = value
 
-        ws.append_row(new_row)
+        # ✅ استخدام insert_row بدلاً من append_row
+        next_row = len(ws.get_all_values()) + 1
+        ws.insert_row(new_row, next_row)
+        logger.info(f"✅ تم إضافة سجل تحديث للمعاملة {id} في الصف {next_row}")
 
         # تحديث شيت القسم
         old_dept = old_data.get('القسم', '')
@@ -1435,7 +1441,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                    </tr>
+                    </table>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -1950,11 +1956,13 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
 
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
-            qr_ws.append_row([
+            next_row_qr = len(qr_ws.get_all_values()) + 1
+            qr_ws.insert_row([
                 transaction_id,
                 f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
                 hyperlink_formula
-            ])
+            ], next_row_qr)
+            logger.debug(f"✅ تم إضافة QR للمعاملة {transaction_id}")
 
         customer_email = new_row.get('البريد الإلكتروني')
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
@@ -1976,12 +1984,14 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         if history_ws:
             now = datetime.now()
             timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-            history_ws.append_row([
+            next_row_history = len(history_ws.get_all_values()) + 1
+            history_ws.insert_row([
                 timestamp,
                 transaction_id,
                 "تم إنشاء المعاملة",
                 "النظام (API)"
-            ])
+            ], next_row_history)
+            logger.debug(f"✅ تم إضافة history للمعاملة {transaction_id}")
     except Exception as e:
         logger.error(f"❌ خطأ في معالجة المعاملة {transaction_id}: {e}", exc_info=True)
 
@@ -1993,11 +2003,13 @@ def check_new_transactions():
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
             return
-        records = ws.get_all_records()
-        current_count = len(records)
+        # استخدام get_all_values() للأداء والدقة
+        all_values = ws.get_all_values()
+        current_count = len(all_values) - 1  # ناقص صف الهيدر
 
         if current_count > last_row_count:
             logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
+            records = ws.get_all_records()
             for i in range(last_row_count, current_count):
                 row_number = i + 2
                 new_row = records[i]
@@ -2016,7 +2028,8 @@ def check_new_transactions():
 # ------------------ جدولة المهام ------------------
 if sheets_client:
     try:
-        last_row_count = len(sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER))
+        ws_temp = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+        last_row_count = len(ws_temp.get_all_values()) - 1 if ws_temp else 0
     except Exception as e:
         logger.error(f"❌ فشل قراءة العدد الأولي: {e}")
         last_row_count = 0
