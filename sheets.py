@@ -237,7 +237,6 @@ class GoogleSheetsClient:
                 break
 
         if row_num:
-            # تحديث كل خلية في الصف الموجود
             for col, header in enumerate(ws_headers, 1):
                 if header in headers:
                     idx = headers.index(header)
@@ -245,7 +244,6 @@ class GoogleSheetsClient:
             logger.info(f"✅ تم تحديث المعاملة {transaction_id} في شيت القسم {department_name}")
             return True
         else:
-            # إذا لم توجد المعاملة في شيت القسم (نادر)، نضيفها
             ws.append_row(row_data)
             logger.info(f"✅ تم إضافة المعاملة {transaction_id} إلى شيت القسم {department_name}")
             return True
@@ -369,6 +367,83 @@ class GoogleSheetsClient:
                     break
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
+
+    # ================== دوال الرموز المباشرة (للاستخدام مع البوت والصفحات) ==================
+    def get_direct_token(self, transaction_id, expiry_minutes=43200):
+        """
+        توليد رمز وصول مباشر (صلاحية طويلة) للمعاملة، دون الحاجة إلى بريد إلكتروني.
+        يستخدم لإنشاء روابط تعديل مباشرة للمستخدمين.
+        - expiry_minutes: مدة صلاحية التوكن بالدقائق (افتراضي 43200 دقيقة = 30 يوم)
+        """
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
+                return None
+
+            # البحث عن توكن سابق لنفس المعاملة وإعادته إذا كان صالحاً
+            records = ws.get_all_records()
+            now = datetime.now()
+            for row in records:
+                if str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at_str = row.get('expires_at')
+                    if expires_at_str:
+                        try:
+                            expires_at = datetime.fromisoformat(expires_at_str)
+                        except ValueError:
+                            try:
+                                expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                continue
+                        if expires_at > now:
+                            # التوكن لا يزال صالحاً، نعيده
+                            return row.get('token')
+                    # إذا كان منتهياً، نستمر لإنشاء جديد (سيتم إضافة صف جديد)
+
+            # إنشاء توكن جديد
+            token = uuid.uuid4().hex
+            expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
+            ws.append_row([token, transaction_id, "direct@system.com", expires_at])
+            logger.info(f"✅ تم توليد رمز مباشر للمعاملة {transaction_id} ينتهي بعد {expiry_minutes} دقيقة")
+            return token
+        except Exception as e:
+            logger.error(f"فشل توليد رمز مباشر: {e}", exc_info=True)
+            return None
+
+    def verify_direct_token(self, token, transaction_id):
+        """
+        التحقق من صحة رمز الوصول المباشر (دون التحقق من البريد).
+        يعيد True إذا كان التوكن صالحاً وغير منتهي الصلاحية.
+        """
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
+                return False
+
+            records = ws.get_all_records()
+            now = datetime.now()
+            for row in records:
+                if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at_str = row.get('expires_at')
+                    if not expires_at_str:
+                        continue
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at_str)
+                    except ValueError:
+                        try:
+                            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            logger.error(f"تنسيق تاريخ غير معروف: {expires_at_str}")
+                            continue
+                    if expires_at > now:
+                        return True
+                    else:
+                        logger.debug(f"الرمز {token} منتهي الصلاحية (انتهى في {expires_at})")
+            return False
+        except Exception as e:
+            logger.error(f"فشل التحقق من الرمز المباشر: {e}", exc_info=True)
+            return False
 
     def archive_transaction(self, transaction_id, department_name=None):
         try:
