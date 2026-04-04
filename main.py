@@ -22,7 +22,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-# استيراد المكونات الخارجية (تأكد من وجودها)
 from sheets import GoogleSheetsClient
 from config import Config
 from qr_generator import QRGenerator
@@ -292,11 +291,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if transaction_id:
             base_url = request.host_url.rstrip('/')
-            token = sheets_client.get_direct_token(transaction_id)
-            if token:
-                edit_link = f"{base_url}/transaction/{transaction_id}?token={token}"
-            else:
-                edit_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+            edit_link = f"{base_url}/transaction/{transaction_id}"  # بدون توكن، سيعيد التوجيه إلى verify-email
             qr_base64 = QRGenerator.generate_qr(edit_link)
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
@@ -465,12 +460,7 @@ async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if key in data and data[key]:
                         msg += f"• {key}: {data[key]}\n"
                 base_url = request.host_url.rstrip('/')
-                token = sheets_client.get_direct_token(transaction_id)
-                if token:
-                    edit_link = f"{base_url}/transaction/{transaction_id}?token={token}"
-                else:
-                    edit_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
-                msg += f"\n🔗 [رابط المتابعة]({edit_link})"
+                msg += f"\n🔗 [رابط المتابعة]({base_url}/view/{transaction_id})"
                 await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
             else:
                 await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
@@ -571,11 +561,7 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if transaction_id:
         base_url = request.host_url.rstrip('/')
-        token = sheets_client.get_direct_token(transaction_id)
-        if token:
-            edit_link = f"{base_url}/transaction/{transaction_id}?token={token}"
-        else:
-            edit_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+        edit_link = f"{base_url}/transaction/{transaction_id}"
         qr_base64 = QRGenerator.generate_qr(edit_link)
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
@@ -927,12 +913,8 @@ def api_submit():
 
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
-
-        # توليد التوكن المباشر
-        direct_token = sheets_client.generate_direct_token(transaction_id)
         base_url = request.host_url.rstrip('/')
-        # رابط التعديل مع التوكن
-        edit_link = f"{base_url}/transaction/{transaction_id}?token={direct_token}"
+        edit_link = f"{base_url}/transaction/{transaction_id}"
         hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
 
         for idx, header in enumerate(headers):
@@ -971,7 +953,7 @@ def api_submit():
                 qr_ws.append_row([
                     transaction_id,
                     f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
-                    hyperlink_formula   # نفس الرابط مع التوكن
+                    hyperlink_formula
                 ])
                 logger.debug(f"✅ تم تحديث QR للمعاملة {transaction_id}")
         rate_limit_write()
@@ -1169,13 +1151,11 @@ def verify_email_page():
         if not email:
             return "الرجاء إدخال البريد الإلكتروني", 400
         if not email.endswith('@it.jan.ah'):
-            return f"🚫غير مصرح: البريد الإلكتروني ", 403
+            return f"🚫 غير مصرح: البريد الإلكتروني يجب أن ينتهي بـ @it.jan.ah", 403
 
-        # جلب التوكن المخزن (إن وجد)
-        token = sheets_client.get_direct_token(transaction_id)
+        token = sheets_client.generate_access_token(transaction_id, email)
         if not token:
-            # إذا لم يكن هناك توكن (معاملات قديمة) نقوم بإنشاء واحد
-            token = sheets_client.generate_direct_token(transaction_id)
+            return "حدث خطأ أثناء توليد رابط الدخول", 500
 
         base_url = request.host_url.rstrip('/')
         edit_url = f"{base_url}/transaction/{transaction_id}?token={token}"
@@ -1208,7 +1188,7 @@ def verify_email_page():
                 <h1>🔐 التحقق من البريد</h1>
             </div>
             <div class="content">
-                <div class="info">💡 أدخل بريدك الجامعي للوصول إلى صفحة تعديل المعاملة.</div>
+                <div class="info">💡 أدخل بريدك الجامعي (@it.jan.ah) للوصول إلى صفحة تعديل المعاملة.</div>
                 <form method="POST">
                     <input type="email" name="email" placeholder="example@it.jan.ah" required>
                     <button type="submit">تحقق</button>
@@ -1394,11 +1374,11 @@ EDIT_HTML = """
 @app.route('/transaction/<id>')
 def edit_transaction_page(id):
     token = request.args.get('token')
-    # إذا كان التوكن موجوداً وصالحاً، اعرض الواجهة
-    if token and sheets_client and sheets_client.verify_direct_token(token, id):
-        return render_template_string(EDIT_HTML)
-    # وإلا أعد توجيه إلى صفحة التحقق
-    return redirect(url_for('verify_email_page', transaction_id=id))
+    if not token:
+        return redirect(url_for('verify_email_page', transaction_id=id))
+    if not sheets_client or not sheets_client.verify_access_token(token, id):
+        abort(403, description="رمز الوصول غير صالح أو منتهي الصلاحية.")
+    return render_template_string(EDIT_HTML)
 
 # ------------------ صفحة المدير ------------------
 INDEX_HTML = """<!DOCTYPE html>
@@ -1443,10 +1423,10 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                     </tr>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
-             </table>
+            </table>
         </div>
     </div>
     <script>
@@ -1496,12 +1476,7 @@ def index():
 @app.route('/qr/<id>')
 def qr_page(id):
     base_url = request.host_url.rstrip('/')
-    # نحاول جلب التوكن المخزن
-    token = sheets_client.get_direct_token(id) if sheets_client else None
-    if token:
-        edit_link = f"{base_url}/transaction/{id}?token={token}"
-    else:
-        edit_link = f"{base_url}/verify-email?transaction_id={id}"
+    edit_link = f"{base_url}/transaction/{id}"
     qr_base64 = QRGenerator.generate_qr(edit_link)
     html = f"""
     <!DOCTYPE html>
@@ -1543,13 +1518,7 @@ def qr_page(id):
 @app.route('/qr_image/<id>')
 def qr_image(id):
     base_url = request.host_url.rstrip('/')
-    # نحاول جلب التوكن المخزن
-    token = sheets_client.get_direct_token(id) if sheets_client else None
-    if token:
-        edit_link = f"{base_url}/transaction/{id}?token={token}"
-    else:
-        # إذا لم يوجد توكن (للمعاملات القديمة) نستخدم صفحة التحقق
-        edit_link = f"{base_url}/verify-email?transaction_id={id}"
+    edit_link = f"{base_url}/transaction/{id}"
     qr_base64 = QRGenerator.generate_qr(edit_link)
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
@@ -1598,11 +1567,11 @@ def register_transaction():
                     <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder="اكتب">
+                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder="اكتب">
+                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
@@ -1667,8 +1636,8 @@ def register_transaction():
                             resultDiv.innerHTML = `
                                 <div style="text-align:center;">
                                     ✅ تم تسجيل المعاملة بنجاح<br>
-                                    🆔 رقم المعاملة: <strong>${json.id}</strong><br><br>
-                                    <a href="${json.edit_link}" target="_blank" style="background:#8b5cf6; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">🔗 الدخول للتعديل</a>
+                                    🆔  رقم المعاملة مهم لا تشاركه ابداً : <strong style="font-size:1.2em;">${json.id}</strong><br><br>
+                                    <a href="${json.edit_link}" target="_blank" style="background:#8b5cf6; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">🔗 عرض التفاصيل</a>
                                     <a href="${json.deep_link}" target="_blank" style="background:#2c3e50; color:white; padding:8px 16px; border-radius:40px; text-decoration:none; margin:5px; display:inline-block;">📱 فتح البوت</a>
                                     <p style="margin-top:15px; font-size:13px;"> احتفظ برقم المعاملة لمتابعة معاملتك .</p>
                                 </div>
@@ -1712,11 +1681,9 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
                 ws.update_cell(row_number, 8, transaction_id)
             logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
 
-        # إنشاء التوكن المباشر
-        direct_token = sheets_client.generate_direct_token(transaction_id)
         base_url = request.host_url.rstrip('/')
-        edit_link = f"{base_url}/transaction/{transaction_id}?token={direct_token}"
-        hyperlink_formula = f'  =HYPERLINK("{edit_link}", "تعديل المعاملة") '
+        edit_link = f"{base_url}/transaction/{transaction_id}"
+        hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
 
         try:
             headers = ws.row_values(1)
@@ -1725,16 +1692,14 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         except ValueError:
             ws.update_cell(row_number, 21, hyperlink_formula)
 
-        # تحديث QR sheet
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
             qr_ws.append_row([
                 transaction_id,
-                f' =IMAGE("{base_url}/qr_image/{transaction_id}")',
+                f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
                 hyperlink_formula
             ])
 
-        # إرسال بريد إلكتروني (اختياري)
         customer_email = new_row.get('البريد الإلكتروني')
         customer_name = new_row.get('اسم صاحب المعاملة الثلاثي')
         if transaction_id and customer_email:
