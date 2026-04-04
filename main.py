@@ -566,7 +566,7 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=base64.b64decode(qr_base64),
-            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي (ينتهي بـ @it.jan.ah)\n3️⃣ سيتم توجيهك إلى صفحة تعديل المعاملة.\n\n🔗 {edit_link}",
+            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي \n3️⃣ سيتم توجيهك إلى صفحة تعديل المعاملة.\n\n🔗 {edit_link}",
             parse_mode='Markdown'
         )
     else:
@@ -1557,7 +1557,7 @@ def register_transaction():
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>📝 تسجيل معاملة جديدة</h1>
+                    <h1>📝 إستمارة تسجيل معاملات</h1>
                     <p>املأ البيانات التالية لتسجيل معاملتك</p>
                 </div>
                 <div class="content">
