@@ -11,6 +11,8 @@ import tempfile
 import time
 import random
 import re
+from collections import deque
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,17 @@ class GoogleSheetsClient:
     _headers_cache_time = None
     _department_sheets_cache = {}
     _department_archive_cache = {}
+
+    # إضافات للأداء العالي
+    _batch_queue = deque()          # قائمة انتظار العمليات المجمعة
+    _batch_lock = threading.Lock()
+    _batch_thread = None
+    _batch_stop = False
+
+    WRITE_RATE_LIMIT = 250           # 250 عملية كل 60 ثانية (آمن لـ Google Sheets)
+    RATE_WINDOW = 60
+    _write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
+    _write_rate_lock = threading.Lock()
 
     def __init__(self):
         try:
@@ -36,26 +49,120 @@ class GoogleSheetsClient:
             time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
+
+            # تشغيل خلفية لتجميع العمليات
+            self._start_batch_worker()
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
-    # ================== دالة مساعدة للإدراج الآمن ==================
-    def safe_append_row(self, worksheet, row_data):
-        """
-        إضافة صف جديد بشكل مضمون دون مشاكل merged cells أو صيغ.
-        تستخدم insert_row بدلاً من append_row.
-        """
+    # ================== دوال التحكم في معدل الكتابة ==================
+    def _wait_for_write_rate(self):
+        """تأخير التنفيذ إذا تم تجاوز الحد المسموح للكتابة خلال النافذة الزمنية"""
+        with self._write_rate_lock:
+            while len(self._write_timestamps) >= self.WRITE_RATE_LIMIT:
+                oldest = self._write_timestamps[0]
+                elapsed = time.time() - oldest
+                if elapsed < self.RATE_WINDOW:
+                    sleep_time = self.RATE_WINDOW - elapsed + 0.1
+                    logger.warning(f"⏳ تجاوز حد الكتابة، انتظار {sleep_time:.2f} ثانية")
+                    time.sleep(sleep_time)
+                else:
+                    self._write_timestamps.popleft()
+            self._write_timestamps.append(time.time())
+
+    # ================== نظام الكتابة المجمعة (Batch) ==================
+    def _start_batch_worker(self):
+        def worker():
+            while not self._batch_stop:
+                time.sleep(0.5)  # كل نصف ثانية نحاول تفريغ الدفعة
+                batch = []
+                with self._batch_lock:
+                    while self._batch_queue and len(batch) < 50:  # حد أقصى 50 صفاً في الدفعة الواحدة
+                        batch.append(self._batch_queue.popleft())
+                if batch:
+                    self._execute_batch(batch)
+        self._batch_thread = threading.Thread(target=worker, daemon=True)
+        self._batch_thread.start()
+
+    def _execute_batch(self, batch_items):
+        """تنفيذ دفعة من الإدراجات (صفوف متعددة في نفس الورقة)"""
+        if not batch_items:
+            return
+        self._wait_for_write_rate()
         try:
+            # تجميع حسب اسم الورقة
+            sheets_ops = {}
+            for item in batch_items:
+                sheet_name = item['sheet_name']
+                if sheet_name not in sheets_ops:
+                    sheets_ops[sheet_name] = []
+                sheets_ops[sheet_name].append(item['row_data'])
+
+            for sheet_name, rows in sheets_ops.items():
+                ws = self.get_worksheet(sheet_name)
+                if ws:
+                    all_values = ws.get_all_values()
+                    next_row = len(all_values) + 1
+                    # إدراج عدة صفوف دفعة واحدة (متاح في gspread عبر insert_rows)
+                    ws.insert_rows(rows, next_row, value_input_option='RAW')
+                    logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
+        except Exception as e:
+            logger.error(f"❌ Batch insert failed: {e}")
+            # في حال فشل الدفعة، نعيد المحاولة كعمليات فردية
+            for item in batch_items:
+                self._safe_append_row_single(item['worksheet'], item['row_data'])
+
+    def queue_append_row(self, worksheet, row_data):
+        """إضافة عملية إدراج إلى قائمة الانتظار للمعالجة المجمعة"""
+        try:
+            sheet_name = worksheet.title
+            with self._batch_lock:
+                self._batch_queue.append({
+                    'sheet_name': sheet_name,
+                    'worksheet': worksheet,
+                    'row_data': row_data.copy()
+                })
+            return True
+        except Exception as e:
+            logger.error(f"Failed to queue row: {e}")
+            return False
+
+    def _safe_append_row_single(self, worksheet, row_data):
+        """إدراج صف واحد فوراً (بدون تجميع) مع التحكم في المعدل"""
+        try:
+            # التأكد من تطابق عدد الأعمدة
+            existing_headers = worksheet.row_values(1)
+            if not existing_headers:
+                return False
+            if len(row_data) != len(existing_headers):
+                if len(row_data) < len(existing_headers):
+                    row_data.extend([''] * (len(existing_headers) - len(row_data)))
+                else:
+                    row_data = row_data[:len(existing_headers)]
+
             all_values = worksheet.get_all_values()
             next_row = len(all_values) + 1
-            worksheet.insert_row(row_data, next_row)
+            worksheet.insert_row(row_data, next_row, value_input_option='RAW')
             logger.debug(f"✅ تم إدراج صف جديد في الصف {next_row}")
             return True
         except Exception as e:
             logger.error(f"❌ فشل إدراج الصف: {e}")
             return False
 
+    def safe_append_row(self, worksheet, row_data, batch=True):
+        """
+        إضافة صف جديد بشكل آمن.
+        إذا كان batch=True (افتراضي) يتم إضافة الصف إلى قائمة الانتظار للتجميع.
+        إذا كان batch=False يتم الإدراج فوراً مع احترام حد المعدل.
+        """
+        if batch:
+            return self.queue_append_row(worksheet, row_data)
+        else:
+            self._wait_for_write_rate()
+            return self._safe_append_row_single(worksheet, row_data)
+
+    # ================== دوال التهيئة والأوراق ==================
     def _init_sheets(self):
         from config import Config
 
@@ -149,6 +256,9 @@ class GoogleSheetsClient:
         rows = data[1:]
         latest = {}
         for row in rows:
+            # التأكد من تطابق الطول
+            if len(row) < len(headers):
+                row.extend([''] * (len(headers) - len(row)))
             row_dict = dict(zip(headers, row))
             transaction_id = str(row_dict.get("ID"))
             latest[transaction_id] = row_dict
@@ -224,7 +334,8 @@ class GoogleSheetsClient:
         ws = self.get_or_create_department_sheet_cached(department_name)
         if ws:
             try:
-                self.safe_append_row(ws, row_data)
+                # استخدام الكتابة المجمعة (batch)
+                self.safe_append_row(ws, row_data, batch=True)
                 logger.debug(f"✅ تم إضافة المعاملة إلى شيت القسم: {department_name}")
                 return True
             except Exception as e:
@@ -258,7 +369,7 @@ class GoogleSheetsClient:
             logger.info(f"✅ تم تحديث المعاملة {transaction_id} في شيت القسم {department_name}")
             return True
         else:
-            self.safe_append_row(ws, row_data)
+            self.safe_append_row(ws, row_data, batch=True)
             logger.info(f"✅ تم إضافة المعاملة {transaction_id} إلى شيت القسم {department_name}")
             return True
 
@@ -311,8 +422,11 @@ class GoogleSheetsClient:
                 headers_archive = archive_sheet.row_values(1)
                 if 'تاريخ_الأرشفة' in headers_archive:
                     idx = headers_archive.index('تاريخ_الأرشفة')
+                    # تأكد من طول الصف
+                    if len(row_data_with_archive) < len(headers_archive):
+                        row_data_with_archive.extend([''] * (len(headers_archive) - len(row_data_with_archive)))
                     row_data_with_archive[idx] = archive_time
-                self.safe_append_row(archive_sheet, row_data_with_archive)
+                self.safe_append_row(archive_sheet, row_data_with_archive, batch=True)
                 return True
             except Exception as e:
                 logger.error(f"فشل إضافة المعاملة إلى أرشيف القسم {department_name}: {e}")
@@ -325,7 +439,7 @@ class GoogleSheetsClient:
             if ws:
                 now = datetime.now()
                 timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-                self.safe_append_row(ws, [timestamp, transaction_id, action, user])
+                self.safe_append_row(ws, [timestamp, transaction_id, action, user], batch=True)
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
@@ -337,7 +451,7 @@ class GoogleSheetsClient:
                 return None
             token = uuid.uuid4().hex
             expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
-            self.safe_append_row(ws, [token, transaction_id, email, expires_at])
+            self.safe_append_row(ws, [token, transaction_id, email, expires_at], batch=True)
             return token
         except Exception as e:
             logger.error(f"فشل توليد رمز الوصول: {e}")
@@ -408,7 +522,7 @@ class GoogleSheetsClient:
 
             token = uuid.uuid4().hex
             expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
-            self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at])
+            self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at], batch=True)
             logger.info(f"✅ تم توليد رمز مباشر للمعاملة {transaction_id} ينتهي بعد {expiry_minutes} دقيقة")
             return token
         except Exception as e:
@@ -463,7 +577,7 @@ class GoogleSheetsClient:
                 return False
             headers = ws_archive_manager.row_values(1)
             new_row = [latest_data.get(header, '') for header in headers]
-            self.safe_append_row(ws_archive_manager, new_row)
+            self.safe_append_row(ws_archive_manager, new_row, batch=True)
 
             # 2. حذف من manager
             all_rows = ws_manager.get_all_values()
@@ -499,7 +613,7 @@ class GoogleSheetsClient:
                     for hist in history_rows:
                         hist['تاريخ_الأرشفة'] = archive_time
                         arch_row = [hist.get(header, '') for header in arch_headers]
-                        self.safe_append_row(ws_archive_history, arch_row)
+                        self.safe_append_row(ws_archive_history, arch_row, batch=True)
                     rows_to_delete = []
                     for i, r in enumerate(records):
                         if str(r.get('ID')) == str(transaction_id):
