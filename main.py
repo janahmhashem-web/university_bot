@@ -36,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------ إعدادات الأداء ------------------
-MAX_WORKERS = 10
+MAX_WORKERS = 20  # تم التعديل: زيادة عدد العمال لمعالجة 200 معاملة/دقيقة
 WRITE_RATE_LIMIT = 250
 RATE_WINDOW = 60
 write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
@@ -945,37 +945,31 @@ def api_submit():
             elif header == 'الرابط':
                 new_row[idx] = hyperlink_formula
 
-        # ✅ استخدام insert_row مع USER_ENTERED
-        next_row = len(ws.get_all_values()) + 1
-        ws.insert_row(new_row, next_row, value_input_option='USER_ENTERED')
-        logger.info(f"✅ تمت كتابة المعاملة {transaction_id} في الصف {next_row} من ورقة manager")
+        # ✅ التعديل: استخدام safe_append_row مع batch=True بدلاً من insert_row المباشر
+        success = sheets_client.safe_append_row(ws, new_row, batch=True)
+        if not success:
+            return jsonify({'success': False, 'error': 'فشل كتابة البيانات في Google Sheets'}), 500
+
+        logger.info(f"✅ تمت كتابة المعاملة {transaction_id}")
 
         # تحديث العداد العالمي
         global last_row_count
-        last_row_count = len(ws.get_all_values())  # أسرع وأدق
+        last_row_count = len(ws.get_all_values())
 
-        # إضافة إلى شيت القسم (غير متزامن)
+        # إضافة إلى شيت القسم (غير متزامن) - لا حاجة لـ rate_limit_write لأن append_to_department_sheet يستخدم safe_append_row
         if department:
-            rate_limit_write()
             executor.submit(sheets_client.append_to_department_sheet, department, new_row, headers)
             logger.debug(f"📌 تم إرسال مهمة كتابة شيت القسم {department} إلى الخلفية")
 
-        # إضافة إلى QR (غير متزامن)
+        # إضافة إلى QR (غير متزامن) - استخدام safe_append_row أيضاً
         def update_qr():
             qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
             if qr_ws:
-                next_row_qr = len(qr_ws.get_all_values()) + 1
-                qr_ws.insert_row([
-                    transaction_id,
-                    f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
-                    hyperlink_formula
-                ], next_row_qr, value_input_option='USER_ENTERED')
-                logger.debug(f"✅ تم تحديث QR للمعاملة {transaction_id}")
-        rate_limit_write()
+                qr_row = [transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', hyperlink_formula]
+                sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
         executor.submit(update_qr)
 
-        # إضافة إلى history (غير متزامن)
-        rate_limit_write()
+        # إضافة إلى history (غير متزامن) - add_history_entry تستخدم safe_append_row داخلياً
         executor.submit(sheets_client.add_history_entry, transaction_id, "تم إنشاء المعاملة", "النظام (API)")
 
         # إرسال إشعار للمدير (غير متزامن)
@@ -1072,15 +1066,15 @@ def api_transaction(id):
                 value = current_count + 1
             new_row[idx] = value
 
-        # ✅ استخدام insert_row مع USER_ENTERED
-        next_row = len(ws.get_all_values()) + 1
-        ws.insert_row(new_row, next_row, value_input_option='USER_ENTERED')
-        logger.info(f"✅ تم إضافة سجل تحديث للمعاملة {id} في الصف {next_row}")
+        # ✅ التعديل: استخدام safe_append_row مع batch=True
+        success = sheets_client.safe_append_row(ws, new_row, batch=True)
+        if not success:
+            return jsonify({'success': False, 'message': 'فشل حفظ التحديث'}), 500
+        logger.info(f"✅ تم إضافة سجل تحديث للمعاملة {id}")
 
-        # تحديث شيت القسم
+        # تحديث شيت القسم - update_department_sheet يستخدم safe_append_row داخلياً
         old_dept = old_data.get('القسم', '')
         if old_dept:
-            rate_limit_write()
             executor.submit(sheets_client.update_department_sheet, old_dept, id, new_row, headers)
 
         # إنشاء رسالة مفصلة بالتغييرات
@@ -1956,12 +1950,9 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
 
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
-            next_row_qr = len(qr_ws.get_all_values()) + 1
-            qr_ws.insert_row([
-                transaction_id,
-                f'=IMAGE("{base_url}/qr_image/{transaction_id}")',
-                hyperlink_formula
-            ], next_row_qr, value_input_option='USER_ENTERED')
+            # ✅ التعديل: استخدام safe_append_row بدلاً من insert_row المباشر
+            qr_row = [transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', hyperlink_formula]
+            sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
             logger.debug(f"✅ تم إضافة QR للمعاملة {transaction_id}")
 
         customer_email = new_row.get('البريد الإلكتروني')
@@ -1984,13 +1975,8 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         if history_ws:
             now = datetime.now()
             timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-            next_row_history = len(history_ws.get_all_values()) + 1
-            history_ws.insert_row([
-                timestamp,
-                transaction_id,
-                "تم إنشاء المعاملة",
-                "النظام (API)"
-            ], next_row_history, value_input_option='USER_ENTERED')
+            # ✅ التعديل: استخدام safe_append_row بدلاً من insert_row المباشر
+            sheets_client.safe_append_row(history_ws, [timestamp, transaction_id, "تم إنشاء المعاملة", "النظام (API)"], batch=True)
             logger.debug(f"✅ تم إضافة history للمعاملة {transaction_id}")
     except Exception as e:
         logger.error(f"❌ خطأ في معالجة المعاملة {transaction_id}: {e}", exc_info=True)
@@ -2003,9 +1989,8 @@ def check_new_transactions():
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
             return
-        # استخدام get_all_values() للأداء والدقة
         all_values = ws.get_all_values()
-        current_count = len(all_values) - 1  # ناقص صف الهيدر
+        current_count = len(all_values) - 1
 
         if current_count > last_row_count:
             logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
