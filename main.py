@@ -1200,7 +1200,7 @@ def verify_email_page():
                 <h1>🔐 التحقق من البريد</h1>
             </div>
             <div class="content">
-                <div class="info">💡 أدخل بريدك الجامعي (@it.jan.ah) للوصول إلى صفحة تعديل المعاملة.</div>
+                <div class="info">💡 أدخل بريدك الجامعي للوصول إلى صفحة تتبع المعاملة.</div>
                 <form method="POST">
                     <input type="email" name="email" placeholder="example@it.jan.ah" required>
                     <button type="submit">تحقق</button>
@@ -1577,7 +1577,7 @@ def register_transaction():
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>📝 تسجيل معاملة جديدة</h1>
+                    <h1>📝 استمارة تسجيل المعاملات</h1>
                     <p>املأ البيانات التالية لتسجيل معاملتك</p>
                 </div>
                 <div class="content">
@@ -1587,11 +1587,11 @@ def register_transaction():
                     <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
+                            <input type="text" id="name" name="name" required placeholder="أكتب...">
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
+                            <input type="text" id="phone" name="phone" required placeholder="أكتب...">
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
