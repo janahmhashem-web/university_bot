@@ -36,7 +36,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ------------------ إعدادات الأداء ------------------
-MAX_WORKERS = 20  # تم التعديل: زيادة عدد العمال لمعالجة 200 معاملة/دقيقة
+MAX_WORKERS = 20
 WRITE_RATE_LIMIT = 250
 RATE_WINDOW = 60
 write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
@@ -945,23 +945,19 @@ def api_submit():
             elif header == 'الرابط':
                 new_row[idx] = hyperlink_formula
 
-        # ✅ التعديل: استخدام safe_append_row مع batch=True بدلاً من insert_row المباشر
         success = sheets_client.safe_append_row(ws, new_row, batch=True)
         if not success:
             return jsonify({'success': False, 'error': 'فشل كتابة البيانات في Google Sheets'}), 500
 
         logger.info(f"✅ تمت كتابة المعاملة {transaction_id}")
 
-        # تحديث العداد العالمي
         global last_row_count
         last_row_count = len(ws.get_all_values())
 
-        # إضافة إلى شيت القسم (غير متزامن) - لا حاجة لـ rate_limit_write لأن append_to_department_sheet يستخدم safe_append_row
         if department:
             executor.submit(sheets_client.append_to_department_sheet, department, new_row, headers)
             logger.debug(f"📌 تم إرسال مهمة كتابة شيت القسم {department} إلى الخلفية")
 
-        # إضافة إلى QR (غير متزامن) - استخدام safe_append_row أيضاً
         def update_qr():
             qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
             if qr_ws:
@@ -969,10 +965,8 @@ def api_submit():
                 sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
         executor.submit(update_qr)
 
-        # إضافة إلى history (غير متزامن) - add_history_entry تستخدم safe_append_row داخلياً
         executor.submit(sheets_client.add_history_entry, transaction_id, "تم إنشاء المعاملة", "النظام (API)")
 
-        # إرسال إشعار للمدير (غير متزامن)
         if Config.ADMIN_CHAT_ID and background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
                 bot_app.bot.send_message(
@@ -1066,18 +1060,15 @@ def api_transaction(id):
                 value = current_count + 1
             new_row[idx] = value
 
-        # ✅ التعديل: استخدام safe_append_row مع batch=True
         success = sheets_client.safe_append_row(ws, new_row, batch=True)
         if not success:
             return jsonify({'success': False, 'message': 'فشل حفظ التحديث'}), 500
         logger.info(f"✅ تم إضافة سجل تحديث للمعاملة {id}")
 
-        # تحديث شيت القسم - update_department_sheet يستخدم safe_append_row داخلياً
         old_dept = old_data.get('القسم', '')
         if old_dept:
             executor.submit(sheets_client.update_department_sheet, old_dept, id, new_row, headers)
 
-        # إنشاء رسالة مفصلة بالتغييرات
         changes = []
         change_messages = {
             'الحالة': lambda new, old: f"📌 تم تغيير الحالة من '{old}' إلى '{new}'",
@@ -1147,7 +1138,7 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحة التحقق بالبريد ------------------
+# ------------------ صفحة التحقق بالبريد (مع القائمة البيضاء) ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
 def verify_email_page():
     transaction_id = request.args.get('transaction_id')
@@ -1162,16 +1153,23 @@ def verify_email_page():
         email = request.form.get('email', '').strip()
         if not email:
             return "الرجاء إدخال البريد الإلكتروني", 400
-        if not email.endswith('@it.jan.ah'):
-            return f"🚫 غير مصرح: البريد الإلكتروني يجب أن ينتهي بـ @it.jan.ah", 403
-
-        token = sheets_client.generate_access_token(transaction_id, email)
+        
+        # التحقق من صيغة البريد (اختياري)
+        if not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
+            return "صيغة البريد الإلكتروني غير صحيحة", 400
+        
+        # التحقق من وجود البريد في القائمة البيضاء
+        if not sheets_client.is_email_allowed(email):
+            return f"🚫 غير مصرح: البريد الإلكتروني {email} غير مسجل في النظام. الرجاء التواصل مع المسؤول.", 403
+        
+        # توليد توكن صالح لمدة 15 دقيقة فقط
+        token = sheets_client.generate_access_token(transaction_id, email, expiry_minutes=15)
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
-
+        
         base_url = request.host_url.rstrip('/')
         edit_url = f"{base_url}/transaction/{transaction_id}?token={token}"
-        logger.info(f"✅ إعادة التوجيه إلى: {edit_url}")
+        logger.info(f"✅ تم إنشاء رابط صالح لـ {email} للمعاملة {transaction_id}")
         return redirect(edit_url)
 
     return '''
@@ -1200,7 +1198,7 @@ def verify_email_page():
                 <h1>🔐 التحقق من البريد</h1>
             </div>
             <div class="content">
-                <div class="info">💡 أدخل بريدك الجامعي للوصول إلى صفحة تتبع المعاملة.</div>
+                <div class="info">💡 أدخل بريدك الجامعي المسجل في النظام للوصول إلى صفحة تتبع المعاملة.</div>
                 <form method="POST">
                     <input type="email" name="email" placeholder="example@it.jan.ah" required>
                     <button type="submit">تحقق</button>
@@ -1435,7 +1433,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                    </tr>
+                    </table>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -1950,7 +1948,6 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
 
         qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
         if qr_ws:
-            # ✅ التعديل: استخدام safe_append_row بدلاً من insert_row المباشر
             qr_row = [transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', hyperlink_formula]
             sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
             logger.debug(f"✅ تم إضافة QR للمعاملة {transaction_id}")
@@ -1975,7 +1972,6 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
         if history_ws:
             now = datetime.now()
             timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-            # ✅ التعديل: استخدام safe_append_row بدلاً من insert_row المباشر
             sheets_client.safe_append_row(history_ws, [timestamp, transaction_id, "تم إنشاء المعاملة", "النظام (API)"], batch=True)
             logger.debug(f"✅ تم إضافة history للمعاملة {transaction_id}")
     except Exception as e:
