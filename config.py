@@ -11,6 +11,9 @@ class Config:
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 
+    # Groq AI
+    GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+
     # Google Sheets
     GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
     SHEET_MANAGER = os.getenv('SHEET_MANAGER', 'manager')
@@ -20,9 +23,7 @@ class Config:
     SHEET_ACCESS_TOKENS = os.getenv('SHEET_ACCESS_TOKENS', 'access_tokens')
     SHEET_ARCHIVE_MANAGER = os.getenv('SHEET_ARCHIVE_MANAGER', 'archive_manager')
     SHEET_ARCHIVE_HISTORY = os.getenv('SHEET_ARCHIVE_HISTORY', 'archive_history')
-
-    # Groq AI
-    GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+    SHEET_ALLOWED_EMAILS = os.getenv('SHEET_ALLOWED_EMAILS', 'allowed_emails')
 
     # Email (اختياري)
     EMAIL_USER = os.getenv('EMAIL_USER')
