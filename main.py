@@ -1577,7 +1577,7 @@ def register_transaction():
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>📝 تسجيل معاملة جديدة</h1>
+                    <h1>📝استمارة تسجيل معاملة جديدة</h1>
                     <p>املأ البيانات التالية لتسجيل معاملتك</p>
                 </div>
                 <div class="content">
