@@ -11,8 +11,6 @@ import tempfile
 import time
 import random
 import re
-import hashlib
-import base64
 from collections import deque
 import threading
 
@@ -36,9 +34,6 @@ class GoogleSheetsClient:
     _write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
     _write_rate_lock = threading.Lock()
 
-    # اسم ورقة القائمة البيضاء
-    SHEET_ALLOWED_EMAILS = "allowed_emails"
-
     def __init__(self):
         try:
             scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -50,15 +45,10 @@ class GoogleSheetsClient:
             self.client = gspread.authorize(creds)
             from config import Config
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
-            logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
+            logger.info("✅ تم الاتصال بـ Google Sheets")
             time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
-
-            self.token_secret = os.getenv('TOKEN_SECRET', 'default_secret_change_me')
-            if self.token_secret == 'default_secret_change_me':
-                logger.warning("⚠️ TOKEN_SECRET لم يتم تعيينه، استخدم القيمة الافتراضية (غير آمن)")
-
             self._start_batch_worker()
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
@@ -93,7 +83,6 @@ class GoogleSheetsClient:
         self._batch_thread.start()
 
     def _execute_batch(self, batch_items):
-        """تنفيذ دفعة من الإدراجات مع تمكين الصيغ (USER_ENTERED)"""
         if not batch_items:
             return
         self._wait_for_write_rate()
@@ -110,7 +99,6 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    # ✅ التعديل الأساسي: USER_ENTERED لتفسير الصيغ
                     ws.insert_rows(rows, next_row, value_input_option='USER_ENTERED')
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
@@ -133,7 +121,6 @@ class GoogleSheetsClient:
             return False
 
     def _safe_append_row_single(self, worksheet, row_data):
-        """إدراج صف واحد فوراً مع تمكين الصيغ (USER_ENTERED)"""
         try:
             existing_headers = worksheet.row_values(1)
             if not existing_headers:
@@ -146,7 +133,6 @@ class GoogleSheetsClient:
 
             all_values = worksheet.get_all_values()
             next_row = len(all_values) + 1
-            # ✅ التعديل الأساسي: USER_ENTERED لتفسير الصيغ
             worksheet.insert_row(row_data, next_row, value_input_option='USER_ENTERED')
             logger.debug(f"✅ تم إدراج صف جديد في الصف {next_row}")
             return True
@@ -187,7 +173,7 @@ class GoogleSheetsClient:
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON", "تاريخ_الأرشفة"
             ],
             Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"],
-            self.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]
+            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -219,6 +205,25 @@ class GoogleSheetsClient:
                     logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
                     break
 
+    # ================== دوال القائمة البيضاء ==================
+    def is_email_allowed(self, email: str) -> bool:
+        try:
+            from config import Config
+            ws = self.get_worksheet(Config.SHEET_ALLOWED_EMAILS)
+            if not ws:
+                logger.warning("⚠️ ورقة allowed_emails غير موجودة، سيتم رفض كل الإيميلات")
+                return False
+            records = ws.get_all_records()
+            email_lower = email.strip().lower()
+            for row in records:
+                if row.get('email', '').strip().lower() == email_lower:
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
+            return False
+
+    # ================== دوال مساعدة عامة ==================
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -231,7 +236,6 @@ class GoogleSheetsClient:
             return ws.get_all_records()
         return []
 
-    # ================== الدوال السريعة ==================
     def get_headers_cached(self):
         if (self._headers_cache is None or 
             (datetime.now() - self._headers_cache_time).seconds > 300):
@@ -425,95 +429,46 @@ class GoogleSheetsClient:
                 logger.error(f"فشل إضافة المعاملة إلى أرشيف القسم {department_name}: {e}")
         return False
 
-    # ================== دوال القائمة البيضاء ==================
-    def is_email_allowed(self, email: str) -> bool:
+    # ================== دوال التوكنات (قد لا تستخدم في main.py الجديد) ==================
+    def generate_access_token(self, transaction_id, email, expiry_minutes=1440):
         try:
-            ws = self.get_worksheet(self.SHEET_ALLOWED_EMAILS)
-            if not ws:
-                logger.warning("⚠️ ورقة allowed_emails غير موجودة، سيتم رفض كل الإيميلات")
-                return False
-            records = ws.get_all_records()
-            email_lower = email.strip().lower()
-            for row in records:
-                if row.get('email', '').strip().lower() == email_lower:
-                    return True
-            return False
-        except Exception as e:
-            logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
-            return False
-
-    # ================== دوال التوكنات الآمنة ==================
-    def generate_access_token(self, transaction_id: str, email: str, expiry_minutes: int = 15) -> str:
-        try:
-            if not self.is_email_allowed(email):
-                logger.warning(f"محاولة إصدار توكن لبريد غير مسموح: {email}")
-                return None
-
-            payload = {
-                'tid': transaction_id,
-                'email': email,
-                'exp': (datetime.utcnow() + timedelta(minutes=expiry_minutes)).isoformat()
-            }
-            payload_str = json.dumps(payload, sort_keys=True)
-            signature = hashlib.sha256((payload_str + self.token_secret).encode()).hexdigest()
-            token_data = base64.urlsafe_b64encode(payload_str.encode()).decode()
-            token = f"{token_data}.{signature}"
-
             ws = self.get_worksheet('access_tokens')
-            if ws:
-                expires_at_str = payload['exp']
-                self.safe_append_row(ws, [token, transaction_id, email, expires_at_str], batch=True)
+            if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
+                return None
+            token = uuid.uuid4().hex
+            expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
+            self.safe_append_row(ws, [token, transaction_id, email, expires_at], batch=True)
             return token
         except Exception as e:
             logger.error(f"فشل توليد رمز الوصول: {e}")
             return None
 
-    def verify_access_token(self, token: str, transaction_id: str) -> bool:
+    def verify_access_token(self, token, transaction_id):
         try:
-            parts = token.split('.')
-            if len(parts) != 2:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
                 return False
-            token_data, signature = parts
-            payload_str = base64.urlsafe_b64decode(token_data).decode()
-            payload = json.loads(payload_str)
-
-            exp = datetime.fromisoformat(payload['exp'])
-            if exp < datetime.utcnow():
-                logger.warning(f"توكن منتهي الصلاحية للمعاملة {transaction_id}")
-                return False
-
-            if payload['tid'] != transaction_id:
-                logger.warning(f"توكن لا يتطابق مع المعاملة {transaction_id}")
-                return False
-
-            expected_sig = hashlib.sha256((payload_str + self.token_secret).encode()).hexdigest()
-            if signature != expected_sig:
-                logger.warning(f"توقيع غير صالح للمعاملة {transaction_id}")
-                return False
-
-            email = payload.get('email')
-            if email and not self.is_email_allowed(email):
-                logger.warning(f"البريد {email} لم يعد مسموحاً للمعاملة {transaction_id}")
-                return False
-
-            return True
-        except Exception as e:
-            logger.error(f"خطأ في التحقق من التوكن: {e}")
+            records = ws.get_all_records()
+            now = datetime.now()
+            for row in records:
+                if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at_str = row.get('expires_at')
+                    if not expires_at_str:
+                        continue
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at_str)
+                    except ValueError:
+                        try:
+                            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            continue
+                    if expires_at > now:
+                        return True
             return False
-
-    def get_direct_token(self, transaction_id, expiry_minutes=43200):
-        try:
-            fake_email = f"direct_{transaction_id}@system.local"
-            token = self.generate_access_token(transaction_id, fake_email, expiry_minutes)
-            if token:
-                logger.info(f"✅ تم توليد رمز مباشر للمعاملة {transaction_id} ينتهي بعد {expiry_minutes} دقيقة")
-            return token
         except Exception as e:
-            logger.error(f"فشل توليد رمز مباشر: {e}", exc_info=True)
-            return None
-
-    def verify_direct_token(self, token, transaction_id):
-        return self.verify_access_token(token, transaction_id)
+            logger.error(f"فشل التحقق من رمز الوصول: {e}")
+            return False
 
     def revoke_access_token(self, token):
         try:
@@ -527,6 +482,39 @@ class GoogleSheetsClient:
                     break
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
+
+    def get_direct_token(self, transaction_id, expiry_minutes=43200):
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
+                return None
+            records = ws.get_all_records()
+            now = datetime.now()
+            for row in records:
+                if str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at_str = row.get('expires_at')
+                    if expires_at_str:
+                        try:
+                            expires_at = datetime.fromisoformat(expires_at_str)
+                        except ValueError:
+                            try:
+                                expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                continue
+                        if expires_at > now:
+                            return row.get('token')
+            token = uuid.uuid4().hex
+            expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
+            self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at], batch=True)
+            logger.info(f"✅ تم توليد رمز مباشر للمعاملة {transaction_id} ينتهي بعد {expiry_minutes} دقيقة")
+            return token
+        except Exception as e:
+            logger.error(f"فشل توليد رمز مباشر: {e}", exc_info=True)
+            return None
+
+    def verify_direct_token(self, token, transaction_id):
+        return self.verify_access_token(token, transaction_id)
 
     # ================== الدوال الأساسية ==================
     def add_history_entry(self, transaction_id, action, user="النظام"):
