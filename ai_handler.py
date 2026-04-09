@@ -15,7 +15,6 @@ class AIAssistant:
         self.sheets_client = sheets_client
 
     async def get_response(self, user_message, user_id, user_name):
-        """الرد الذكي على أي سؤال عن المعاملات"""
         try:
             intent, params = self._understand_intent(user_message)
             data_context = await self._fetch_data_by_intent(intent, params, user_id)
@@ -26,25 +25,18 @@ class AIAssistant:
             return "عذراً، حدث خطأ في المعالجة."
 
     def _understand_intent(self, message):
-        """
-        فهم نية المستخدم واستخراج المعايير
-        يعيد (intent, params) حيث intent نوع الطلب و params قاموس بالمعايير
-        """
         msg = message.lower()
         params = {}
         intent = "general"
 
-        # البحث عن رقم معاملة
         tid_match = re.search(r'MUT-\d{14}-\d{4}', message)
         if tid_match:
             params['transaction_id'] = tid_match.group(0)
             return "specific_transaction", params
 
-        # معاملة المستخدم المسجل
         if any(word in msg for word in ['معاملتي', 'خاصتي', 'تابع معاملتي']):
             return "my_transaction", params
 
-        # إحصائيات عامة
         if any(word in msg for word in ['إحصاء', 'إحصائيات', 'عدد', 'كم', 'stats', 'إجمالي', 'مجموع']):
             intent = "stats"
             if 'مكتملة' in msg or 'completed' in msg:
@@ -57,19 +49,16 @@ class AIAssistant:
                 params['status'] = 'متأخرة'
             return intent, params
 
-        # البحث بقسم
         dept_match = re.search(r'قسم\s+([^\s]+(?:\s+[^\s]+)?)', msg)
         if dept_match:
             params['department'] = dept_match.group(1).strip()
             return "department_transactions", params
 
-        # البحث بموظف مسؤول
         emp_match = re.search(r'موظف\s+([^\s]+(?:\s+[^\s]+)?)', msg)
         if emp_match:
             params['employee'] = emp_match.group(1).strip()
             return "employee_transactions", params
 
-        # معاملات بحالة محددة
         if 'مكتملة' in msg and ('معاملة' in msg or 'المعاملات' in msg):
             params['status'] = 'مكتملة'
             return "status_transactions", params
@@ -83,7 +72,6 @@ class AIAssistant:
             params['status'] = 'متأخرة'
             return "status_transactions", params
 
-        # بحث مفتوح
         if 'ابحث' in msg or 'بحث' in msg or 'find' in msg:
             search_match = re.search(r'(?:ابحث|بحث)\s+عن\s+(.+)', msg)
             if search_match:
@@ -93,7 +81,6 @@ class AIAssistant:
         return intent, params
 
     async def _fetch_data_by_intent(self, intent, params, user_id):
-        """جلب البيانات من Google Sheets حسب النية"""
         if not self.sheets_client:
             return "نظام قاعدة البيانات غير متصل حالياً."
 
@@ -172,7 +159,7 @@ class AIAssistant:
                 more = f"\n... و{len(found)-5} معاملات أخرى" if len(found) > 5 else ""
                 return f"🔎 نتائج البحث عن '{keyword}': ({len(found)} معاملة)\n{sample}{more}"
 
-            # استعلام عام: إحصائيات عامة + أحدث المعاملات
+            # عام
             records = self.sheets_client.get_latest_transactions_fast("manager")
             total = len(records)
             completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
@@ -187,23 +174,16 @@ class AIAssistant:
                     f"- متأخرة: {delayed}\n\n"
                     f"أحدث المعاملات:\n{recent_text}\n\n"
                     f"يمكنك السؤال عن معاملة محددة برقمها، أو عن إحصائيات قسم معين، أو عن معاملات موظف معين.")
-
         except Exception as e:
             logger.error(f"خطأ في جلب البيانات: {e}")
             return "حدث خطأ أثناء جلب البيانات من النظام."
 
     async def _generate_response(self, user_message, data_context, user_name):
-        """توليد الرد باستخدام Groq"""
         system_prompt = (
             "أنت مساعد ذكي ومفيد للمعاملات الإدارية. لديك إمكانية الوصول إلى بيانات حقيقية عن المعاملات. "
-            "استخدم البيانات المقدمة في السياق للإجابة بدقة ووضوح. إذا طلب المستخدم معلومات غير متوفرة، أخبره بذلك بلطف. "
-            "أجب بالعربية الفصحى أو العامية المفهومة، بأسلوب مهذب ومحترم. "
-            "يمكنك تقديم نصائح أو توجيهات إضافية إذا رأيت ذلك مناسباً."
+            "استخدم البيانات المقدمة في السياق للإجابة بدقة ووضوح. أجب بالعربية بأسلوب مهذب."
         )
-        user_prompt = f"المستخدم: {user_name}\nسؤال المستخدم: {user_message}\n\n"
-        user_prompt += f"البيانات المتاحة من النظام:\n{data_context}\n\n"
-        user_prompt += "قدم إجابة مفيدة وواضحة بناءً على البيانات أعلاه."
-
+        user_prompt = f"المستخدم: {user_name}\nسؤال المستخدم: {user_message}\n\nالبيانات المتاحة:\n{data_context}\n\nقدم إجابة مفيدة."
         try:
             chat_completion = self.client.chat.completions.create(
                 messages=[
@@ -217,10 +197,9 @@ class AIAssistant:
             return chat_completion.choices[0].message.content
         except Exception as e:
             logger.error(f"Groq API error: {e}")
-            return f"عذراً، حدث خطأ أثناء توليد الرد. لكن بناءً على البيانات المتاحة:\n{data_context}"
+            return f"عذراً، حدث خطأ. بناءً على البيانات المتاحة:\n{data_context}"
 
     def _get_user_transaction_id(self, chat_id):
-        """استرجاع رقم المعاملة المرتبطة بالمستخدم من ورقة users"""
         if not self.sheets_client:
             return None
         try:
@@ -236,7 +215,6 @@ class AIAssistant:
         return None
 
     def _format_transaction_context(self, data):
-        """تنسيق بيانات المعاملة للسياق"""
         lines = []
         lines.append(f"**المعاملة رقم {data.get('ID', 'غير معروف')}**")
         lines.append(f"- الاسم: {data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}")
@@ -252,7 +230,6 @@ class AIAssistant:
         return "\n".join(lines)
 
     async def analyze_transaction(self, transaction_data, history):
-        """تحليل معمق لمعاملة معينة"""
         try:
             summary = f"رقم المعاملة: {transaction_data.get('ID', 'غير معروف')}\n"
             summary += f"الاسم: {transaction_data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}\n"
