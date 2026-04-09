@@ -17,17 +17,19 @@ import threading
 logger = logging.getLogger(__name__)
 
 class GoogleSheetsClient:
+    # ذاكرة مؤقتة
     _headers_cache = None
     _headers_cache_time = None
     _department_sheets_cache = {}
     _department_archive_cache = {}
 
-    _batch_queue = deque()
+    # إضافات للأداء العالي
+    _batch_queue = deque()          # قائمة انتظار العمليات المجمعة
     _batch_lock = threading.Lock()
     _batch_thread = None
     _batch_stop = False
 
-    WRITE_RATE_LIMIT = 250
+    WRITE_RATE_LIMIT = 250           # 250 عملية كل 60 ثانية (آمن لـ Google Sheets)
     RATE_WINDOW = 60
     _write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
     _write_rate_lock = threading.Lock()
@@ -43,16 +45,20 @@ class GoogleSheetsClient:
             self.client = gspread.authorize(creds)
             from config import Config
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
-            logger.info("✅ تم الاتصال بـ Google Sheets")
+            logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
             time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
+
+            # تشغيل خلفية لتجميع العمليات
             self._start_batch_worker()
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
+    # ================== دوال التحكم في معدل الكتابة ==================
     def _wait_for_write_rate(self):
+        """تأخير التنفيذ إذا تم تجاوز الحد المسموح للكتابة خلال النافذة الزمنية"""
         with self._write_rate_lock:
             while len(self._write_timestamps) >= self.WRITE_RATE_LIMIT:
                 oldest = self._write_timestamps[0]
@@ -65,13 +71,14 @@ class GoogleSheetsClient:
                     self._write_timestamps.popleft()
             self._write_timestamps.append(time.time())
 
+    # ================== نظام الكتابة المجمعة (Batch) ==================
     def _start_batch_worker(self):
         def worker():
             while not self._batch_stop:
-                time.sleep(0.5)
+                time.sleep(0.5)  # كل نصف ثانية نحاول تفريغ الدفعة
                 batch = []
                 with self._batch_lock:
-                    while self._batch_queue and len(batch) < 50:
+                    while self._batch_queue and len(batch) < 50:  # حد أقصى 50 صفاً في الدفعة الواحدة
                         batch.append(self._batch_queue.popleft())
                 if batch:
                     self._execute_batch(batch)
@@ -79,10 +86,12 @@ class GoogleSheetsClient:
         self._batch_thread.start()
 
     def _execute_batch(self, batch_items):
+        """تنفيذ دفعة من الإدراجات (صفوف متعددة في نفس الورقة)"""
         if not batch_items:
             return
         self._wait_for_write_rate()
         try:
+            # تجميع حسب اسم الورقة
             sheets_ops = {}
             for item in batch_items:
                 sheet_name = item['sheet_name']
@@ -95,14 +104,17 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    ws.insert_rows(rows, next_row, value_input_option='USER_ENTERED')
+                    # إدراج عدة صفوف دفعة واحدة (متاح في gspread عبر insert_rows)
+                    ws.insert_rows(rows, next_row, value_input_option='RAW')
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
             logger.error(f"❌ Batch insert failed: {e}")
+            # في حال فشل الدفعة، نعيد المحاولة كعمليات فردية
             for item in batch_items:
                 self._safe_append_row_single(item['worksheet'], item['row_data'])
 
     def queue_append_row(self, worksheet, row_data):
+        """إضافة عملية إدراج إلى قائمة الانتظار للمعالجة المجمعة"""
         try:
             sheet_name = worksheet.title
             with self._batch_lock:
@@ -117,7 +129,9 @@ class GoogleSheetsClient:
             return False
 
     def _safe_append_row_single(self, worksheet, row_data):
+        """إدراج صف واحد فوراً (بدون تجميع) مع التحكم في المعدل"""
         try:
+            # التأكد من تطابق عدد الأعمدة
             existing_headers = worksheet.row_values(1)
             if not existing_headers:
                 return False
@@ -129,7 +143,7 @@ class GoogleSheetsClient:
 
             all_values = worksheet.get_all_values()
             next_row = len(all_values) + 1
-            worksheet.insert_row(row_data, next_row, value_input_option='USER_ENTERED')
+            worksheet.insert_row(row_data, next_row, value_input_option='RAW')
             logger.debug(f"✅ تم إدراج صف جديد في الصف {next_row}")
             return True
         except Exception as e:
@@ -137,12 +151,18 @@ class GoogleSheetsClient:
             return False
 
     def safe_append_row(self, worksheet, row_data, batch=True):
+        """
+        إضافة صف جديد بشكل آمن.
+        إذا كان batch=True (افتراضي) يتم إضافة الصف إلى قائمة الانتظار للتجميع.
+        إذا كان batch=False يتم الإدراج فوراً مع احترام حد المعدل.
+        """
         if batch:
             return self.queue_append_row(worksheet, row_data)
         else:
             self._wait_for_write_rate()
             return self._safe_append_row_single(worksheet, row_data)
 
+    # ================== دوال التهيئة والأوراق ==================
     def _init_sheets(self):
         from config import Config
 
@@ -156,7 +176,11 @@ class GoogleSheetsClient:
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON"
             ],
             Config.SHEET_HISTORY: ["timestamp", "ID", "action", "user"],
-            Config.SHEET_QR: ["transaction_id", "qr_image", "qr_verify_link"],
+            Config.SHEET_QR: [
+                "transaction_id",
+                "qr_image",
+                "qr_verify_link"
+            ],
             Config.SHEET_USERS: ["transaction_id", "chat_id"],
             Config.SHEET_ACCESS_TOKENS: ["token", "transaction_id", "email", "expires_at"],
             Config.SHEET_ARCHIVE_MANAGER: [
@@ -167,8 +191,7 @@ class GoogleSheetsClient:
                 "المستمسكات المطلوبة", "الرابط", "آخر تعديل بواسطة", "آخر تعديل بتاريخ",
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON", "تاريخ_الأرشفة"
             ],
-            Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"],
-            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]
+            Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -200,23 +223,6 @@ class GoogleSheetsClient:
                     logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
                     break
 
-    def is_email_allowed(self, email: str) -> bool:
-        try:
-            from config import Config
-            ws = self.get_worksheet(Config.SHEET_ALLOWED_EMAILS)
-            if not ws:
-                logger.warning("⚠️ ورقة allowed_emails غير موجودة، سيتم رفض كل الإيميلات")
-                return False
-            records = ws.get_all_records()
-            email_lower = email.strip().lower()
-            for row in records:
-                if row.get('email', '').strip().lower() == email_lower:
-                    return True
-            return False
-        except Exception as e:
-            logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
-            return False
-
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -229,6 +235,7 @@ class GoogleSheetsClient:
             return ws.get_all_records()
         return []
 
+    # ================== الدوال السريعة ==================
     def get_headers_cached(self):
         if (self._headers_cache is None or 
             (datetime.now() - self._headers_cache_time).seconds > 300):
@@ -249,6 +256,7 @@ class GoogleSheetsClient:
         rows = data[1:]
         latest = {}
         for row in rows:
+            # التأكد من تطابق الطول
             if len(row) < len(headers):
                 row.extend([''] * (len(headers) - len(row)))
             row_dict = dict(zip(headers, row))
@@ -285,6 +293,7 @@ class GoogleSheetsClient:
                 return row
         return None
 
+    # ================== دوال إدارة شيتات الأقسام ==================
     def _sanitize_sheet_name(self, name):
         name = re.sub(r'[\\/*?:\[\]]', '_', name)
         name = name[:100]
@@ -325,6 +334,7 @@ class GoogleSheetsClient:
         ws = self.get_or_create_department_sheet_cached(department_name)
         if ws:
             try:
+                # استخدام الكتابة المجمعة (batch)
                 self.safe_append_row(ws, row_data, batch=True)
                 logger.debug(f"✅ تم إضافة المعاملة إلى شيت القسم: {department_name}")
                 return True
@@ -412,6 +422,7 @@ class GoogleSheetsClient:
                 headers_archive = archive_sheet.row_values(1)
                 if 'تاريخ_الأرشفة' in headers_archive:
                     idx = headers_archive.index('تاريخ_الأرشفة')
+                    # تأكد من طول الصف
                     if len(row_data_with_archive) < len(headers_archive):
                         row_data_with_archive.extend([''] * (len(headers_archive) - len(row_data_with_archive)))
                     row_data_with_archive[idx] = archive_time
@@ -421,6 +432,7 @@ class GoogleSheetsClient:
                 logger.error(f"فشل إضافة المعاملة إلى أرشيف القسم {department_name}: {e}")
         return False
 
+    # ================== الدوال الأساسية ==================
     def add_history_entry(self, transaction_id, action, user="النظام"):
         try:
             ws = self.get_worksheet('history')
@@ -484,12 +496,14 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
 
+    # ================== دوال الرموز المباشرة ==================
     def get_direct_token(self, transaction_id, expiry_minutes=43200):
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
                 logger.error("ورقة access_tokens غير موجودة")
                 return None
+
             records = ws.get_all_records()
             now = datetime.now()
             for row in records:
@@ -505,6 +519,7 @@ class GoogleSheetsClient:
                                 continue
                         if expires_at > now:
                             return row.get('token')
+
             token = uuid.uuid4().hex
             expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
             self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at], batch=True)
@@ -515,7 +530,35 @@ class GoogleSheetsClient:
             return None
 
     def verify_direct_token(self, token, transaction_id):
-        return self.verify_access_token(token, transaction_id)
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
+                return False
+
+            records = ws.get_all_records()
+            now = datetime.now()
+            for row in records:
+                if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at_str = row.get('expires_at')
+                    if not expires_at_str:
+                        continue
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at_str)
+                    except ValueError:
+                        try:
+                            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            logger.error(f"تنسيق تاريخ غير معروف: {expires_at_str}")
+                            continue
+                    if expires_at > now:
+                        return True
+                    else:
+                        logger.debug(f"الرمز {token} منتهي الصلاحية (انتهى في {expires_at})")
+            return False
+        except Exception as e:
+            logger.error(f"فشل التحقق من الرمز المباشر: {e}", exc_info=True)
+            return False
 
     def archive_transaction(self, transaction_id, department_name=None):
         try:
@@ -528,6 +571,7 @@ class GoogleSheetsClient:
             archive_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             latest_data['تاريخ_الأرشفة'] = archive_time
 
+            # 1. أرشفة في archive_manager
             ws_archive_manager = self.get_worksheet('archive_manager')
             if not ws_archive_manager:
                 return False
@@ -535,6 +579,7 @@ class GoogleSheetsClient:
             new_row = [latest_data.get(header, '') for header in headers]
             self.safe_append_row(ws_archive_manager, new_row, batch=True)
 
+            # 2. حذف من manager
             all_rows = ws_manager.get_all_values()
             headers_mgr = ws_manager.row_values(1)
             id_col = None
@@ -551,11 +596,13 @@ class GoogleSheetsClient:
                 for row_num in sorted(rows_to_delete, reverse=True):
                     ws_manager.delete_row(row_num)
 
+            # 3. أرشفة من شيت القسم
             if department_name:
                 dept_headers = self.get_or_create_department_sheet_cached(department_name).row_values(1)
                 dept_row = [latest_data.get(header, '') for header in dept_headers]
                 self.archive_from_department(transaction_id, department_name, dept_row, archive_time)
 
+            # 4. أرشفة سجل التاريخ
             ws_history = self.get_worksheet('history')
             if ws_history:
                 records = ws_history.get_all_records()
@@ -578,6 +625,7 @@ class GoogleSheetsClient:
             logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}")
             return False
 
+    # ================== دوال الإحصائيات المتقدمة للمدير ==================
     def get_distinct_departments(self):
         records = self.get_latest_transactions_fast('manager')
         return sorted(set(r.get('القسم', '').strip() for r in records if r.get('القسم')))
@@ -643,6 +691,7 @@ class GoogleSheetsClient:
                 workload[dept]['delayed'] += 1
         return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
 
+    # ================== رفع الملفات ==================
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
             folder_id = self._get_or_create_folder(folder_name)
