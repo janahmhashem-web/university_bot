@@ -17,13 +17,11 @@ import threading
 logger = logging.getLogger(__name__)
 
 class GoogleSheetsClient:
-    # ذاكرة مؤقتة
     _headers_cache = None
     _headers_cache_time = None
     _department_sheets_cache = {}
     _department_archive_cache = {}
 
-    # إضافات للأداء العالي
     _batch_queue = deque()
     _batch_lock = threading.Lock()
     _batch_thread = None
@@ -54,7 +52,6 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
-    # ================== دوال التحكم في معدل الكتابة ==================
     def _wait_for_write_rate(self):
         with self._write_rate_lock:
             while len(self._write_timestamps) >= self.WRITE_RATE_LIMIT:
@@ -68,7 +65,6 @@ class GoogleSheetsClient:
                     self._write_timestamps.popleft()
             self._write_timestamps.append(time.time())
 
-    # ================== نظام الكتابة المجمعة (Batch) ==================
     def _start_batch_worker(self):
         def worker():
             while not self._batch_stop:
@@ -147,7 +143,6 @@ class GoogleSheetsClient:
             self._wait_for_write_rate()
             return self._safe_append_row_single(worksheet, row_data)
 
-    # ================== دوال التهيئة والأوراق ==================
     def _init_sheets(self):
         from config import Config
 
@@ -205,7 +200,6 @@ class GoogleSheetsClient:
                     logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
                     break
 
-    # ================== دوال القائمة البيضاء ==================
     def is_email_allowed(self, email: str) -> bool:
         try:
             from config import Config
@@ -223,7 +217,6 @@ class GoogleSheetsClient:
             logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
             return False
 
-    # ================== دوال مساعدة عامة ==================
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -292,7 +285,6 @@ class GoogleSheetsClient:
                 return row
         return None
 
-    # ================== دوال إدارة شيتات الأقسام ==================
     def _sanitize_sheet_name(self, name):
         name = re.sub(r'[\\/*?:\[\]]', '_', name)
         name = name[:100]
@@ -429,7 +421,16 @@ class GoogleSheetsClient:
                 logger.error(f"فشل إضافة المعاملة إلى أرشيف القسم {department_name}: {e}")
         return False
 
-    # ================== دوال التوكنات (قد لا تستخدم في main.py الجديد) ==================
+    def add_history_entry(self, transaction_id, action, user="النظام"):
+        try:
+            ws = self.get_worksheet('history')
+            if ws:
+                now = datetime.now()
+                timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+                self.safe_append_row(ws, [timestamp, transaction_id, action, user], batch=True)
+        except Exception as e:
+            logger.error(f"فشل إضافة سجل التتبع: {e}")
+
     def generate_access_token(self, transaction_id, email, expiry_minutes=1440):
         try:
             ws = self.get_worksheet('access_tokens')
@@ -516,17 +517,6 @@ class GoogleSheetsClient:
     def verify_direct_token(self, token, transaction_id):
         return self.verify_access_token(token, transaction_id)
 
-    # ================== الدوال الأساسية ==================
-    def add_history_entry(self, transaction_id, action, user="النظام"):
-        try:
-            ws = self.get_worksheet('history')
-            if ws:
-                now = datetime.now()
-                timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-                self.safe_append_row(ws, [timestamp, transaction_id, action, user], batch=True)
-        except Exception as e:
-            logger.error(f"فشل إضافة سجل التتبع: {e}")
-
     def archive_transaction(self, transaction_id, department_name=None):
         try:
             ws_manager = self.get_worksheet('manager')
@@ -588,7 +578,6 @@ class GoogleSheetsClient:
             logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}")
             return False
 
-    # ================== دوال الإحصائيات المتقدمة للمدير ==================
     def get_distinct_departments(self):
         records = self.get_latest_transactions_fast('manager')
         return sorted(set(r.get('القسم', '').strip() for r in records if r.get('القسم')))
@@ -654,7 +643,6 @@ class GoogleSheetsClient:
                 workload[dept]['delayed'] += 1
         return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
 
-    # ================== رفع الملفات ==================
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
             folder_id = self._get_or_create_folder(folder_name)
