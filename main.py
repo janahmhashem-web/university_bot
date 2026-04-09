@@ -291,11 +291,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if transaction_id:
             base_url = request.host_url.rstrip('/')
-            direct_token = sheets_client.get_direct_token(transaction_id)
-            if direct_token:
-                edit_link = f"{base_url}/transaction/{transaction_id}?token={direct_token}"
-            else:
-                edit_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+            edit_link = f"{base_url}/transaction/{transaction_id}"   # بدون توكن
             qr_base64 = QRGenerator.generate_qr(edit_link)
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
@@ -565,11 +561,7 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if transaction_id:
         base_url = request.host_url.rstrip('/')
-        direct_token = sheets_client.get_direct_token(transaction_id)
-        if direct_token:
-            edit_link = f"{base_url}/transaction/{transaction_id}?token={direct_token}"
-        else:
-            edit_link = f"{base_url}/verify-email?transaction_id={transaction_id}"
+        edit_link = f"{base_url}/transaction/{transaction_id}"
         qr_base64 = QRGenerator.generate_qr(edit_link)
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
@@ -1138,7 +1130,7 @@ def api_transaction_history(id):
         logger.error(f"خطأ في جلب التاريخ: {e}")
         return jsonify([])
 
-# ------------------ صفحة التحقق بالبريد (مع القائمة البيضاء) ------------------
+# ------------------ صفحة التحقق بالبريد (مع القائمة البيضاء وبدون صلاحية) ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
 def verify_email_page():
     transaction_id = request.args.get('transaction_id')
@@ -1153,23 +1145,19 @@ def verify_email_page():
         email = request.form.get('email', '').strip()
         if not email:
             return "الرجاء إدخال البريد الإلكتروني", 400
-        
+
         # التحقق من صيغة البريد (اختياري)
         if not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
             return "صيغة البريد الإلكتروني غير صحيحة", 400
-        
+
         # التحقق من وجود البريد في القائمة البيضاء
         if not sheets_client.is_email_allowed(email):
-            return f"🚫 غير مصرح: البريد الإلكتروني {email} غير مسجل في النظام. الرجاء التواصل مع المسؤول.", 403
-        
-        # توليد توكن صالح لمدة 15 دقيقة فقط
-        token = sheets_client.generate_access_token(transaction_id, email, expiry_minutes=15)
-        if not token:
-            return "حدث خطأ أثناء توليد رابط الدخول", 500
-        
+            return f"🚫 لا توجد صلاحية access لهذا البريد الإلكتروني: {email}", 403
+
+        # ✅ تم إثبات البريد، نوجه مباشرة إلى صفحة التعديل بدون أي توكن
         base_url = request.host_url.rstrip('/')
-        edit_url = f"{base_url}/transaction/{transaction_id}?token={token}"
-        logger.info(f"✅ تم إنشاء رابط صالح لـ {email} للمعاملة {transaction_id}")
+        edit_url = f"{base_url}/transaction/{transaction_id}"
+        logger.info(f"✅ تم إثبات البريد {email} للمعاملة {transaction_id}، التوجيه إلى {edit_url}")
         return redirect(edit_url)
 
     return '''
@@ -1209,7 +1197,7 @@ def verify_email_page():
     </html>
     '''
 
-# ------------------ صفحة تعديل المعاملة ------------------
+# ------------------ صفحة تعديل المعاملة (بدون التحقق من التوكن) ------------------
 EDIT_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -1383,11 +1371,7 @@ EDIT_HTML = """
 
 @app.route('/transaction/<id>')
 def edit_transaction_page(id):
-    token = request.args.get('token')
-    if not token:
-        return redirect(url_for('verify_email_page', transaction_id=id))
-    if not sheets_client or not sheets_client.verify_access_token(token, id):
-        abort(403, description="رمز الوصول غير صالح أو منتهي الصلاحية.")
+    # تم إزالة التحقق من التوكن بالكامل، الصفحة متاحة مباشرة
     return render_template_string(EDIT_HTML)
 
 # ------------------ صفحة المدير ------------------
@@ -1486,11 +1470,7 @@ def index():
 @app.route('/qr/<id>')
 def qr_page(id):
     base_url = request.host_url.rstrip('/')
-    direct_token = sheets_client.get_direct_token(id) if sheets_client else None
-    if direct_token:
-        edit_link = f"{base_url}/transaction/{id}?token={direct_token}"
-    else:
-        edit_link = f"{base_url}/verify-email?transaction_id={id}"
+    edit_link = f"{base_url}/transaction/{id}"
     qr_base64 = QRGenerator.generate_qr(edit_link)
     html = f"""
     <!DOCTYPE html>
@@ -1532,11 +1512,7 @@ def qr_page(id):
 @app.route('/qr_image/<id>')
 def qr_image(id):
     base_url = request.host_url.rstrip('/')
-    direct_token = sheets_client.get_direct_token(id) if sheets_client else None
-    if direct_token:
-        edit_link = f"{base_url}/transaction/{id}?token={direct_token}"
-    else:
-        edit_link = f"{base_url}/verify-email?transaction_id={id}"
+    edit_link = f"{base_url}/transaction/{id}"
     qr_base64 = QRGenerator.generate_qr(edit_link)
     img_data = base64.b64decode(qr_base64)
     return Response(img_data, mimetype='image/png')
@@ -1575,7 +1551,7 @@ def register_transaction():
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>📝 استمارة تسجيل المعاملات</h1>
+                    <h1>📝 تسجيل معاملة جديدة</h1>
                     <p>املأ البيانات التالية لتسجيل معاملتك</p>
                 </div>
                 <div class="content">
@@ -1585,11 +1561,11 @@ def register_transaction():
                     <form id="transactionForm" enctype="multipart/form-data">
                         <div class="form-group">
                             <label class="required">الاسم الثلاثي</label>
-                            <input type="text" id="name" name="name" required placeholder="أكتب...">
+                            <input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي">
                         </div>
                         <div class="form-group">
                             <label class="required">رقم الهاتف</label>
-                            <input type="text" id="phone" name="phone" required placeholder="أكتب...">
+                            <input type="text" id="phone" name="phone" required placeholder="07712345678">
                         </div>
                         <div class="form-group">
                             <label class="required">الوظيفة</label>
