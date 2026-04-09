@@ -291,7 +291,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if transaction_id:
             base_url = request.host_url.rstrip('/')
-            edit_link = f"{base_url}/transaction/{transaction_id}"   # بدون توكن
+            edit_link = f"{base_url}/transaction/{transaction_id}"
             qr_base64 = QRGenerator.generate_qr(edit_link)
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
@@ -566,7 +566,7 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=base64.b64decode(qr_base64),
-            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي (ينتهي بـ @it.jan.ah)\n3️⃣ سيتم توجيهك إلى صفحة تعديل المعاملة.\n\n🔗 {edit_link}",
+            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي المسجل\n3️⃣ سيتم توجيهك إلى صفحة تعديل المعاملة.\n\n🔗 {edit_link}",
             parse_mode='Markdown'
         )
     else:
