@@ -198,9 +198,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if data:
                 save_user_chat(transaction_id, user_id)
                 await update.message.reply_text(
-                    f"✅ تم ربط حسابك بالمعاملة\n\n"
-                    f"🆔 {transaction_id}\n"
-                    f" استعمل رقم معاملتك (🆔)للحصول على معلومات حول معاملتك "
+                    f"✅ تم ربط حسابك بالمعاملة\n\n🆔 {transaction_id}\nاستعمل رقم معاملتك للحصول على المعلومات."
                 )
             else:
                 await update.message.reply_text("❌ المعاملة غير موجودة")
@@ -225,48 +223,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🔍 بحث متقدم", callback_data="cmd_advanced_search")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    msg = "👋 *اهلاً بك في بوت متابعة المعاملات*\n\n"
-    msg += "يمكنك استخدام الأزرار أدناه للوصول إلى الخدمات بسهولة:\n"
-    if is_admin:
-        msg += "\n👑 *أنت مدير*\nيمكنك طلب أي شيء مثل: قائمة المعاملات، إحصائيات، تحليل معاملة، إلخ."
-    else:
-        msg += "\n📌 *ملاحظة:* بعد اختيار الخدمة، سيُطلب منك إدخال رقم المعاملة (ID) أو كلمة البحث."
+    msg = "👋 *أهلاً بك في بوت متابعة المعاملات*\n\nيمكنك استخدام الأزرار أدناه."
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    logger.debug(f"🔘 تم الضغط على زر: {query.data}")
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
 
     if data == "cmd_id":
         context.user_data['awaiting'] = 'id'
-        await query.edit_message_text(
-            "📌 أرسل رقم المعاملة (ID) لمعرفة تفاصيلها.\n\n"
-            "مثال: `MUT-20260324123456-1234`",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("📌 أرسل رقم المعاملة (ID):", parse_mode='Markdown')
     elif data == "cmd_history":
         context.user_data['awaiting'] = 'history'
-        await query.edit_message_text(
-            "📌 أرسل رقم المعاملة (ID) لمعرفة سجل تتبعها.\n\n"
-            "مثال: `MUT-20260324123456-1234`",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("📌 أرسل رقم المعاملة (ID) لمعرفة سجل التتبع:", parse_mode='Markdown')
     elif data == "cmd_search":
         context.user_data['awaiting'] = 'search'
-        await query.edit_message_text(
-            "🔎 أدخل كلمة البحث (مثل: اسم، قسم، أو رقم معاملة):",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("🔎 أدخل كلمة البحث (اسم، قسم، أو رقم معاملة):", parse_mode='Markdown')
     elif data == "cmd_analyze":
         context.user_data['awaiting'] = 'analyze'
-        await query.edit_message_text(
-            "📊 أرسل رقم المعاملة (ID) لتحليلها.\n\n"
-            "مثال: `MUT-20260324123456-1234`",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("📊 أرسل رقم المعاملة (ID) لتحليلها:", parse_mode='Markdown')
     elif data == "cmd_qr":
         transaction_id = None
         if sheets_client:
@@ -281,14 +258,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.error(f"خطأ في جلب معاملة المستخدم: {e}")
 
-        instruction_text = (
-            "📱 *كيفية استخدام رمز QR لتتبع المعاملة*\n\n"
-            "1️⃣ قم بطباعة رمز QR الموجود في صفحة المعاملة.\n"
-            "2️⃣ الصق الورقة مع المعاملة في مكان واضح.\n"
-            "3️⃣  سيتم تتبع المعاملة بنجاح ✅\n"
-            "💡 *نصيحة:* احتفظ بالورقة في ملف المعاملة لتسهيل التتبع."
-        )
-
+        instruction_text = "📱 *كيفية استخدام رمز QR:*\n1️⃣ اطبع رمز QR\n2️⃣ الصقه في مكان واضح\n3️⃣ سيتم التتبع بنجاح"
         if transaction_id:
             base_url = request.host_url.rstrip('/')
             edit_link = f"{base_url}/transaction/{transaction_id}"
@@ -296,24 +266,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_photo(
                 chat_id=update.effective_chat.id,
                 photo=base64.b64decode(qr_base64),
-                caption=instruction_text + f"\n\n🔗 *رابط التعديل:*\n`{edit_link}`\n\nقم بمسح الرمز أو فتح الرابط للدخول إلى صفحة تعديل المعاملة.",
+                caption=instruction_text + f"\n\n🔗 {edit_link}",
                 parse_mode='Markdown'
             )
             await query.message.delete()
         else:
-            await query.edit_message_text(
-                instruction_text + "\n\n📌 *لم يتم ربط حسابك بأي معاملة بعد.*\n\n"
-                "لربط حسابك بمعاملة، استخدم الرابط التالي:\n"
-                f"`https://t.me/{Config.BOT_USERNAME}?start=رقم_المعاملة`\n\n"
-                "(استبدل `رقم_المعاملة` برقم المعاملة الخاص بك)",
-                parse_mode='Markdown'
-            )
+            await query.edit_message_text(instruction_text + "\n\n📌 لم يتم ربط حسابك بأي معاملة بعد.", parse_mode='Markdown')
     elif data == "cmd_support":
-        await query.edit_message_text(
-            "📨 لإرسال رسالة إلى فريق الدعم، استخدم الأمر `/support`.\n"
-            "سنتواصل معك في أقرب وقت.",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("📨 استخدم الأمر `/support` للتواصل مع الدعم.", parse_mode='Markdown')
     elif data == "cmd_stats":
         if user_id != Config.ADMIN_CHAT_ID:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
@@ -325,7 +285,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = len(records)
         completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
         pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
-        msg = f"📊 *إحصائيات*\nإجمالي المعاملات: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
+        msg = f"📊 *إحصائيات*\nإجمالي: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_advanced_stats":
         if user_id != Config.ADMIN_CHAT_ID:
@@ -338,11 +298,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dept_count = len(sheets_client.get_distinct_departments())
         emp_count = len(sheets_client.get_distinct_employees())
         status_dist = sheets_client.get_status_distribution()
-        msg = f"📊 *إحصائيات عامة*\n"
-        msg += f"• إجمالي المعاملات: {total}\n"
-        msg += f"• عدد الأقسام: {dept_count}\n"
-        msg += f"• عدد الموظفين المسؤولين: {emp_count}\n"
-        msg += f"• توزيع الحالات:\n"
+        msg = f"📊 *إحصائيات عامة*\n• إجمالي: {total}\n• الأقسام: {dept_count}\n• الموظفون: {emp_count}\n• التوزيع:\n"
         for status, count in status_dist.items():
             if count > 0:
                 msg += f"   - {status}: {count}\n"
@@ -360,7 +316,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         msg = "🏢 *إحصائيات الأقسام*\n"
         for dept, count in stats.items():
-            msg += f"• {dept}: {count} معاملة\n"
+            msg += f"• {dept}: {count}\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_emp_stats":
         if user_id != Config.ADMIN_CHAT_ID:
@@ -373,7 +329,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not workload:
             await query.edit_message_text("لا توجد بيانات.")
             return
-        msg = "👥 *إحصائيات الموظفين (حمل العمل)*\n"
+        msg = "👥 *حمل العمل*\n"
         for emp, data in list(workload.items())[:20]:
             msg += f"• {emp}: {data['total']} معاملة ({data['delayed']} متأخرة)\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
@@ -385,7 +341,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ غير متصل بقاعدة البيانات.")
             return
         dist = sheets_client.get_status_distribution()
-        msg = "📈 *توزيع المعاملات حسب الحالة*\n"
+        msg = "📈 *توزيع الحالات*\n"
         for status, count in dist.items():
             if count > 0:
                 msg += f"• {status}: {count}\n"
@@ -401,7 +357,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not recent:
             await query.edit_message_text("لا توجد معاملات.")
             return
-        msg = "📋 *آخر 10 معاملات (حسب آخر تعديل)*\n"
+        msg = "📋 *آخر 10 معاملات*\n"
         for r in recent:
             msg += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')} - {r.get('الحالة', '')}\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
@@ -411,13 +367,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data['awaiting'] = 'adv_search'
         await query.edit_message_text(
-            "🔍 *البحث المتقدم*\n\n"
-            "أدخل معايير البحث بالصيغة:\n"
-            "`القسم:...`  أو `الموظف:...`  أو `الحالة:...`\n\n"
-            "مثال: `القسم:تكنولوجيا المعلومات`\n"
-            "مثال: `الموظف:أحمد`\n"
-            "مثال: `الحالة:متأخرة`\n"
-            "يمكنك الجمع بينها بفاصلة: `القسم:تقنيات, الحالة:جديد`",
+            "🔍 *البحث المتقدم*\nأدخل معايير البحث:\n`القسم:...` أو `الموظف:...` أو `الحالة:...`\nمثال: `القسم:تقنيات, الحالة:جديد`",
             parse_mode='Markdown'
         )
     elif data.startswith("history_"):
@@ -433,12 +383,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history = [r for r in records if str(r.get('ID')) == transaction_id]
         if history:
             history.sort(key=lambda x: x.get('timestamp', ''))
-            msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n"
+            msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n\n"
             for entry in history:
                 time_str = entry.get('timestamp', '')
                 action = entry.get('action', '')
                 user = entry.get('user', '')
-                msg += f"• {time_str} - {action} (بواسطة: {user})\n"
+                msg += f"🕒 `{time_str}`\n📌 {action}\n👤 بواسطة: {user}\n\n"
             await query.edit_message_text(msg, parse_mode='Markdown')
         else:
             await query.edit_message_text(f"لا يوجد سجل للمعاملة {transaction_id}")
@@ -446,81 +396,68 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⚠️ أمر غير معروف.")
 
 async def get_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not sheets_client:
-            await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات حالياً.")
-            return
-        if context.args:
-            transaction_id = context.args[0]
-            logger.info(f"🔍 البحث عن ID: {transaction_id}")
-            data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
-            if data:
-                msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
-                for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
-                    if key in data and data[key]:
-                        msg += f"• {key}: {data[key]}\n"
-                base_url = request.host_url.rstrip('/')
-                msg += f"\n🔗 [رابط المتابعة]({base_url}/view/{transaction_id})"
-                await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
-            else:
-                await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
+    if not sheets_client:
+        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        return
+    if context.args:
+        transaction_id = context.args[0]
+        data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
+        if data:
+            msg = f"🔍 *تفاصيل المعاملة {transaction_id}:*\n"
+            for key in ['اسم صاحب المعاملة الثلاثي', 'الحالة', 'الموظف المسؤول']:
+                if key in data and data[key]:
+                    msg += f"• {key}: {data[key]}\n"
+            base_url = request.host_url.rstrip('/')
+            msg += f"\n🔗 [رابط المتابعة]({base_url}/view/{transaction_id})"
+            await update.message.reply_text(msg, parse_mode='Markdown', disable_web_page_preview=True)
         else:
-            await update.message.reply_text("الرجاء إدخال رقم المعاملة: /id 123")
-    except Exception as e:
-        logger.error(f"❌ خطأ في get_id: {e}", exc_info=True)
-        await update.message.reply_text("عذراً، حدث خطأ.")
+            await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
+    else:
+        await update.message.reply_text("الرجاء إدخال رقم المعاملة: /id <رقم>")
 
 async def get_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not sheets_client:
-            await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+    if not sheets_client:
+        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        return
+    if context.args:
+        transaction_id = context.args[0]
+        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+        if not ws:
+            await update.message.reply_text("❌ لا يوجد سجل تاريخ.")
             return
-        if context.args:
-            transaction_id = context.args[0]
-            ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-            if not ws:
-                await update.message.reply_text("❌ لا يوجد سجل تاريخ.")
-                return
-            records = ws.get_all_records()
-            history = [r for r in records if str(r.get('ID')) == transaction_id]
-            if history:
-                history.sort(key=lambda x: x.get('timestamp', ''))
-                msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n"
-                for entry in history:
-                    time_str = entry.get('timestamp', '')
-                    action = entry.get('action', '')
-                    user = entry.get('user', '')
-                    msg += f"• {time_str} - {action} (بواسطة: {user})\n"
-                await update.message.reply_text(msg, parse_mode='Markdown')
-            else:
-                await update.message.reply_text(f"لا يوجد سجل للمعاملة {transaction_id}")
+        records = ws.get_all_records()
+        history = [r for r in records if str(r.get('ID')) == transaction_id]
+        if history:
+            history.sort(key=lambda x: x.get('timestamp', ''))
+            msg = f"📜 *سجل تتبع المعاملة {transaction_id}:*\n\n"
+            for entry in history:
+                time_str = entry.get('timestamp', '')
+                action = entry.get('action', '')
+                user = entry.get('user', '')
+                msg += f"🕒 `{time_str}`\n📌 {action}\n👤 بواسطة: {user}\n\n"
+            await update.message.reply_text(msg, parse_mode='Markdown')
         else:
-            await update.message.reply_text("الرجاء إدخال رقم المعاملة: /history 123")
-    except Exception as e:
-        logger.error(f"خطأ في history: {e}")
-        await update.message.reply_text("حدث خطأ.")
+            await update.message.reply_text(f"لا يوجد سجل للمعاملة {transaction_id}")
+    else:
+        await update.message.reply_text("الرجاء إدخال رقم المعاملة: /history <رقم>")
 
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not sheets_client:
-            await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
-            return
-        if context.args:
-            keyword = ' '.join(context.args)
-            records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
-            found = []
-            for r in records:
-                if keyword in str(r.values()):
-                    found.append(r.get('ID', ''))
-            if found:
-                await update.message.reply_text(f"🔎 المعاملات التي تحتوي على '{keyword}':\n" + "\n".join(found[:10]))
-            else:
-                await update.message.reply_text("لا توجد نتائج.")
+    if not sheets_client:
+        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        return
+    if context.args:
+        keyword = ' '.join(context.args)
+        records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
+        found = []
+        for r in records:
+            if keyword in str(r.values()):
+                found.append(r.get('ID', ''))
+        if found:
+            await update.message.reply_text(f"🔎 نتائج البحث عن '{keyword}':\n" + "\n".join(found[:10]))
         else:
-            await update.message.reply_text("الرجاء إدخال كلمة للبحث: /search كلمة")
-    except Exception as e:
-        logger.error(f"خطأ في search: {e}")
-        await update.message.reply_text("حدث خطأ.")
+            await update.message.reply_text("لا توجد نتائج.")
+    else:
+        await update.message.reply_text("الرجاء إدخال كلمة البحث: /search <كلمة>")
 
 async def wake(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ البوت نشط وجاهز!")
@@ -566,15 +503,14 @@ async def qr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_photo(
             chat_id=update.effective_chat.id,
             photo=base64.b64decode(qr_base64),
-            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز أو اضغط الرابط\n2️⃣ أدخل بريدك الجامعي المسجل\n3️⃣ سيتم توجيهك إلى صفحة تعديل المعاملة.\n\n🔗 {edit_link}",
+            caption=f"📱 *رمز QR للوصول إلى المعاملة*\n\n🆔 {transaction_id}\n\n1️⃣ امسح الرمز\n2️⃣ أدخل بريدك المسجل\n3️⃣ سيتم توجيهك إلى صفحة التعديل.\n\n🔗 {edit_link}",
             parse_mode='Markdown'
         )
     else:
         await update.message.reply_text(
             "📌 *لم يتم ربط حسابك بأي معاملة بعد.*\n\n"
             "لربط حسابك بمعاملة، استخدم الرابط التالي:\n"
-            f"`https://t.me/{Config.BOT_USERNAME}?start=رقم_المعاملة`\n\n"
-            "(استبدل `رقم_المعاملة` برقم المعاملة الخاص بك)",
+            f"`https://t.me/{Config.BOT_USERNAME}?start=رقم_المعاملة`",
             parse_mode='Markdown'
         )
 
@@ -593,39 +529,33 @@ async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        if not sheets_client:
-            await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
-            return
-        if not context.args:
-            await update.message.reply_text("الرجاء إدخال رقم المعاملة: /analyze MUT-123456")
-            return
-        transaction_id = context.args[0]
-        data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
-        if not data:
-            await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
-            return
-        transaction_data = data
-        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-        history = []
-        if ws:
-            records = ws.get_all_records()
-            history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
-                       for r in records if str(r.get('ID')) == transaction_id]
-            history.sort(key=lambda x: x['time'])
-        await update.message.reply_text("🔍 جاري تحليل المعاملة...")
-        if ai_assistant:
-            analysis = await ai_assistant.analyze_transaction(transaction_data, history)
-        else:
-            analysis = "❌ خدمة التحليل غير متاحة حالياً (مفتاح API غير موجود)."
-        await update.message.reply_text(analysis, parse_mode='Markdown')
-    except Exception as e:
-        logger.error(f"خطأ في /analyze: {e}", exc_info=True)
-        await update.message.reply_text("عذراً، حدث خطأ أثناء التحليل.")
+    if not sheets_client:
+        await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
+        return
+    if not context.args:
+        await update.message.reply_text("الرجاء إدخال رقم المعاملة: /analyze <MUT-...>")
+        return
+    transaction_id = context.args[0]
+    data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, transaction_id)
+    if not data:
+        await update.message.reply_text(f"❌ لا توجد معاملة بالرقم {transaction_id}")
+        return
+    ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+    history = []
+    if ws:
+        records = ws.get_all_records()
+        history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
+                   for r in records if str(r.get('ID')) == transaction_id]
+        history.sort(key=lambda x: x['time'])
+    await update.message.reply_text("🔍 جاري التحليل...")
+    if ai_assistant:
+        analysis = await ai_assistant.analyze_transaction(data, history)
+    else:
+        analysis = "❌ خدمة التحليل غير متاحة."
+    await update.message.reply_text(analysis, parse_mode='Markdown')
 
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-
     if 'awaiting' in context.user_data:
         awaiting = context.user_data.pop('awaiting')
         if awaiting == 'id':
@@ -655,7 +585,7 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     elif key == 'الحالة':
                         criteria['status'] = val
             if not criteria:
-                await update.message.reply_text("❌ لم يتم التعرف على المعايير. استخدم الصيغة المذكورة.")
+                await update.message.reply_text("❌ معايير غير صحيحة.")
                 return
             records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
             filtered = []
@@ -670,105 +600,19 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if match:
                     filtered.append(r)
             if not filtered:
-                await update.message.reply_text("❌ لا توجد معاملات تطابق المعايير.")
+                await update.message.reply_text("❌ لا توجد معاملات.")
                 return
-            msg = f"🔍 *نتائج البحث ({len(filtered)} معاملة)*\n"
+            msg = f"🔍 *نتائج ({len(filtered)} معاملة)*\n"
             for r in filtered[:20]:
                 msg += f"• `{r.get('ID')}` - {r.get('اسم صاحب المعاملة الثلاثي')} - {r.get('الحالة')}\n"
-            if len(filtered) > 20:
-                msg += f"\nو {len(filtered)-20} معاملات أخرى..."
             await update.message.reply_text(msg, parse_mode='Markdown')
         return
-
-    await ai_chat_handler(update, context)
-
-async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-    user_id = update.effective_user.id
-    is_admin = (user_id == Config.ADMIN_CHAT_ID)
-    user_name = update.effective_user.first_name or ""
-
-    if is_admin:
-        msg_lower = user_message.lower()
-        if any(word in msg_lower for word in ['جميع المعاملات', 'قائمة المعاملات', 'كل المعاملات', 'عرض الكل']):
-            response = get_all_transactions_list()
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return
-        if any(word in msg_lower for word in ['إحصاء', 'إحصائيات', 'stats', 'احصائيات']):
-            await stats(update, context)
-            return
-        if 'مكتملة' in msg_lower:
-            response = get_transactions_by_status('مكتملة')
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return
-        if 'قيد المعالجة' in msg_lower:
-            response = get_transactions_by_status('قيد المعالجة')
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return
-        if 'جديد' in msg_lower:
-            response = get_transactions_by_status('جديد')
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return
-        if 'متأخرة' in msg_lower:
-            response = get_transactions_by_status('متأخرة')
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return
-        if 'خطأ' in msg_lower or 'أخطاء' in msg_lower:
-            response = get_transactions_with_errors()
-            await update.message.reply_text(response, parse_mode='Markdown')
-            return
-        if 'تحليل' in msg_lower:
-            match = re.search(r'MUT-\d{14}-\d{4}', user_message)
-            if match:
-                transaction_id = match.group()
-                context.args = [transaction_id]
-                await analyze(update, context)
-                return
-            else:
-                await update.message.reply_text("الرجاء إدخال رقم المعاملة بشكل صحيح: /analyze MUT-123456...")
-                return
-
-        if 'قسم' in user_message:
-            dept_name = re.search(r'قسم\s+(.+?)(?:\s|$)', user_message)
-            if dept_name:
-                dept = dept_name.group(1).strip()
-                filtered = sheets_client.get_transactions_by_department(dept)
-                if filtered:
-                    await update.message.reply_text(f"📊 المعاملات في قسم {dept}: {len(filtered)} معاملة")
-                else:
-                    await update.message.reply_text(f"لا توجد معاملات في قسم {dept}")
-                return
-        if 'موظف' in user_message:
-            emp_name = re.search(r'موظف\s+(.+?)(?:\s|$)', user_message)
-            if emp_name:
-                emp = emp_name.group(1).strip()
-                filtered = sheets_client.get_transactions_by_employee(emp)
-                if filtered:
-                    await update.message.reply_text(f"📊 المعاملات للموظف {emp}: {len(filtered)} معاملة")
-                else:
-                    await update.message.reply_text(f"لا توجد معاملات للموظف {emp}")
-                return
-        if 'متأخرة' in user_message:
-            delayed = sheets_client.filter_transactions('manager', status='متأخرة')
-            await update.message.reply_text(f"⚠️ عدد المعاملات المتأخرة: {len(delayed)}")
-            return
-
-        logger.info(f"🤖 استعلام ذكي من المدير {user_name}: {user_message[:50]}...")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-        if ai_assistant:
-            response = await ai_assistant.get_response(user_message, user_id, user_name)
-        else:
-            response = "❌ خدمة الذكاء الاصطناعي غير متاحة حالياً."
+    # إذا لم يكن في انتظار، نمرر إلى المساعد الذكي
+    if ai_assistant:
+        response = await ai_assistant.get_response(text, update.effective_user.id, update.effective_user.first_name or "")
         await update.message.reply_text(response)
-        return
-
-    if not ai_assistant:
-        await update.message.reply_text("عذراً، خدمة الذكاء الاصطناعي غير متاحة حالياً.")
-        return
-    logger.info(f"🤖 استعلام ذكي من {user_name}: {user_message[:50]}...")
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    response = await ai_assistant.get_response(user_message, user_id, user_name)
-    await update.message.reply_text(response)
+    else:
+        await update.message.reply_text("عذراً، المساعد الذكي غير متاح.")
 
 # ------------------ إعداد البوت وحلقة الأحداث ------------------
 bot_app = None
@@ -789,11 +633,11 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("analyze", analyze))
         bot_app.add_handler(CallbackQueryHandler(button_callback))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
-        logger.info("✅ تم بناء البوت وإضافة المعالجات")
+        logger.info("✅ تم بناء البوت")
 
         async def init_bot():
             await bot_app.initialize()
-            logger.info("✅ تم تهيئة البوت في الحلقة الخلفية")
+            logger.info("✅ تم تهيئة البوت في الخلفية")
 
         def start_background_loop():
             global background_loop
@@ -804,7 +648,6 @@ if Config.TELEGRAM_BOT_TOKEN:
 
         loop_thread = threading.Thread(target=start_background_loop, daemon=True)
         loop_thread.start()
-        logger.info("⏳ انتظار تهيئة البوت في الخلفية...")
         time.sleep(2)
     except Exception as e:
         logger.error(f"❌ فشل إعداد البوت: {e}")
@@ -816,18 +659,12 @@ def webhook():
     if bot_app is None or background_loop is None:
         return "Bot not initialized", 500
     try:
-        logger.info("📩 تم استقبال طلب webhook")
         json_str = request.get_data(as_text=True)
-        logger.debug(f"📦 محتوى webhook: {json_str[:200]}")
         update = Update.de_json(json.loads(json_str), bot_app.bot)
-        future = asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
-        try:
-            future.result(timeout=5)
-        except Exception as e:
-            logger.error(f"❌ خطأ في معالجة التحديث: {e}", exc_info=True)
+        asyncio.run_coroutine_threadsafe(bot_app.process_update(update), background_loop)
         return "OK"
     except Exception as e:
-        logger.error(f"❌ خطأ في webhook: {e}", exc_info=True)
+        logger.error(f"خطأ في webhook: {e}")
         return "Error", 500
 
 def set_webhook_sync():
@@ -836,47 +673,23 @@ def set_webhook_sync():
     webhook_url = f"{Config.WEB_APP_URL.rstrip('/')}/webhook"
     token = Config.TELEGRAM_BOT_TOKEN
     try:
-        del_resp = requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
-        if del_resp.status_code == 200:
-            logger.info("✅ تم حذف webhook القديم")
-        else:
-            logger.warning(f"⚠️ فشل حذف webhook القديم: {del_resp.text}")
-
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/setWebhook",
-            data={"url": webhook_url}
-        )
+        requests.post(f"https://api.telegram.org/bot{token}/deleteWebhook")
+        resp = requests.post(f"https://api.telegram.org/bot{token}/setWebhook", data={"url": webhook_url})
         if resp.status_code == 200 and resp.json().get("ok"):
             logger.info(f"✅ Webhook set to {webhook_url}")
         else:
             logger.error(f"❌ فشل تعيين webhook: {resp.text}")
     except Exception as e:
-        logger.error(f"❌ خطأ في تعيين webhook: {e}")
+        logger.error(f"خطأ في تعيين webhook: {e}")
 
 if Config.WEB_APP_URL and bot_app:
-    def delayed_webhook():
-        time.sleep(5)
-        set_webhook_sync()
-    threading.Thread(target=delayed_webhook).start()
-    logger.info("⏳ سيتم تعيين webhook بعد 5 ثوانٍ...")
+    threading.Thread(target=lambda: (time.sleep(5), set_webhook_sync())).start()
 
 # ------------------ نقاط نهاية API ------------------
 @app.route('/api/submit', methods=['POST'])
 def api_submit():
-    global sheets_client
     if sheets_client is None:
-        logger.error("sheets_client is None, attempting to reconnect...")
-        try:
-            sheets_client = GoogleSheetsClient()
-            global ai_assistant
-            try:
-                ai_assistant = AIAssistant(sheets_client=sheets_client)
-            except Exception as e:
-                logger.error(f"Failed to reinit AI: {e}")
-        except Exception as e:
-            logger.error(f"Reconnection failed: {e}")
-            return jsonify({'success': False, 'error': 'النظام غير متصل بقاعدة البيانات'}), 500
-
+        return jsonify({'success': False, 'error': 'النظام غير متصل بقاعدة البيانات'}), 500
     try:
         name = request.form.get('name', '').strip()
         phone = request.form.get('phone', '').strip()
@@ -892,24 +705,16 @@ def api_submit():
             if file_link:
                 attachments = attachments_text + "\n" + file_link if attachments_text else file_link
 
-        now = datetime.now()
-        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-
         if not name or not phone:
             return jsonify({'success': False, 'error': 'الاسم والهاتف مطلوبان'}), 400
 
-        if not sheets_client:
-            return jsonify({'success': False, 'error': 'النظام غير متصل بقاعدة البيانات'}), 500
-
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
-            logger.error("❌ ورقة manager غير موجودة")
             return jsonify({'success': False, 'error': 'ورقة manager غير موجودة'}), 500
 
-        now_id = datetime.now()
-        date_str = now_id.strftime("%Y%m%d%H%M%S")
-        random_part = random.randint(1000, 9999)
-        transaction_id = f"MUT-{date_str}-{random_part}"
+        now = datetime.now()
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        transaction_id = f"MUT-{now.strftime('%Y%m%d%H%M%S')}-{random.randint(1000,9999)}"
 
         headers = ws.row_values(1)
         new_row = [''] * len(headers)
@@ -937,37 +742,16 @@ def api_submit():
             elif header == 'الرابط':
                 new_row[idx] = hyperlink_formula
 
-        success = sheets_client.safe_append_row(ws, new_row, batch=True)
-        if not success:
-            return jsonify({'success': False, 'error': 'فشل كتابة البيانات في Google Sheets'}), 500
+        sheets_client.safe_append_row(ws, new_row, batch=True)
+        logger.info(f"✅ تم إنشاء المعاملة {transaction_id}")
 
-        logger.info(f"✅ تمت كتابة المعاملة {transaction_id}")
+        # تحديث QR
+        qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
+        if qr_ws:
+            qr_row = [transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', hyperlink_formula]
+            sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
 
-        global last_row_count
-        last_row_count = len(ws.get_all_values())
-
-        if department:
-            executor.submit(sheets_client.append_to_department_sheet, department, new_row, headers)
-            logger.debug(f"📌 تم إرسال مهمة كتابة شيت القسم {department} إلى الخلفية")
-
-        def update_qr():
-            qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
-            if qr_ws:
-                qr_row = [transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', hyperlink_formula]
-                sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
-        executor.submit(update_qr)
-
-        executor.submit(sheets_client.add_history_entry, transaction_id, "تم إنشاء المعاملة", "النظام (API)")
-
-        if Config.ADMIN_CHAT_ID and background_loop and bot_app:
-            asyncio.run_coroutine_threadsafe(
-                bot_app.bot.send_message(
-                    chat_id=Config.ADMIN_CHAT_ID,
-                    text=f"🆕 *معاملة جديدة*\nالاسم: {name}\nالهاتف: {phone}\nID: {transaction_id}\nالوظيفة: {function}\nالقسم: {department}",
-                    parse_mode='Markdown'
-                ),
-                background_loop
-            )
+        sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "API")
 
         return jsonify({
             'success': True,
@@ -975,9 +759,8 @@ def api_submit():
             'edit_link': edit_link,
             'deep_link': f"https://t.me/{Config.BOT_USERNAME}?start={transaction_id}"
         })
-
     except Exception as e:
-        logger.error(f"🔥 خطأ في /api/submit: {e}", exc_info=True)
+        logger.error(f"خطأ في /api/submit: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/headers')
@@ -987,8 +770,7 @@ def api_headers():
     ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
     if not ws:
         return jsonify([])
-    headers = ws.row_values(1)
-    return jsonify(headers)
+    return jsonify(ws.row_values(1))
 
 @app.route('/api/transactions', methods=['GET'])
 def api_transactions():
@@ -1014,28 +796,22 @@ def api_transactions():
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
     if not sheets_client:
-        return jsonify({'success': False, 'message': 'غير متصل بـ Google Sheets'}), 500
-
+        return jsonify({'success': False, 'message': 'غير متصل'}), 500
     if request.method == 'GET':
         data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
         if not data:
             return jsonify({'error': 'Not found'}), 404
         return jsonify(data)
-
     else:
         updates = request.json
         old_data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
         if not old_data:
             return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
-
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         headers = ws.row_values(1)
-
         new_row = [''] * len(headers)
         employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
         now = datetime.now()
-        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-
         for idx, header in enumerate(headers):
             value = old_data.get(header, '')
             if header in updates:
@@ -1043,56 +819,52 @@ def api_transaction(id):
             if header == 'آخر تعديل بواسطة':
                 value = employee_name
             elif header == 'آخر تعديل بتاريخ':
-                value = now_str
+                value = now.strftime("%Y-%m-%d %H:%M:%S")
             elif header == 'عدد التعديلات':
                 try:
-                    current_count = int(old_data.get(header, 0))
+                    value = int(old_data.get(header, 0)) + 1
                 except:
-                    current_count = 0
-                value = current_count + 1
+                    value = 1
             new_row[idx] = value
+        sheets_client.safe_append_row(ws, new_row, batch=True)
 
-        success = sheets_client.safe_append_row(ws, new_row, batch=True)
-        if not success:
-            return jsonify({'success': False, 'message': 'فشل حفظ التحديث'}), 500
-        logger.info(f"✅ تم إضافة سجل تحديث للمعاملة {id}")
-
-        old_dept = old_data.get('القسم', '')
-        if old_dept:
-            executor.submit(sheets_client.update_department_sheet, old_dept, id, new_row, headers)
-
+        # إنشاء رسالة التغييرات بشكل واضح
         changes = []
-        change_messages = {
-            'الحالة': lambda new, old: f"📌 تم تغيير الحالة من '{old}' إلى '{new}'",
-            'المؤسسة التالية': lambda new, old: f"🏢 تم نقل المعاملة إلى مؤسسة '{new}'",
-            'الموظف المسؤول': lambda new, old: f"👤 تم تعيين '{new}' مسؤولاً عن المعاملة",
-            'التأخير': lambda new, old: f"⚠️ تم تغيير حالة التأخير إلى '{new}'",
-            'الأولوية': lambda new, old: f"⚡ الأولوية تغيرت إلى '{new}'",
-            'تاريخ التحويل': lambda new, old: f"📅 تم تحديث تاريخ التحويل إلى '{new}'",
-            'سبب التحويل': lambda new, old: f"📝 تم تحديث سبب التحويل",
-            'الموافق': lambda new, old: f"✅ تمت الموافقة من قبل '{new}'",
-            'ملاحظات إضافية': lambda new, old: f"💬 تم إضافة ملاحظات جديدة",
-            'آخر إجراء': lambda new, old: f"🔄 آخر إجراء: {new}",
-        }
-
         for key, new_value in updates.items():
             old_value = old_data.get(key, '')
             if new_value != old_value:
-                if key in change_messages:
-                    changes.append(change_messages[key](new_value, old_value))
+                if key == 'الموظف المسؤول':
+                    changes.append(f"👤 المسؤول الآن: {new_value}")
+                elif key == 'المؤسسة التالية':
+                    changes.append(f"🏢 المؤسسة الآن: {new_value}")
+                elif key == 'الحالة':
+                    changes.append(f"📌 الحالة الآن: {new_value}")
+                elif key == 'التأخير':
+                    changes.append(f"⚠️ التأخير الآن: {new_value}")
+                elif key == 'الأولوية':
+                    changes.append(f"⚡ الأولوية الآن: {new_value}")
+                elif key == 'تاريخ التحويل':
+                    changes.append(f"📅 تاريخ التحويل الآن: {new_value}")
+                elif key == 'سبب التحويل':
+                    changes.append(f"📝 سبب التحويل: {new_value}")
+                elif key == 'الموافق':
+                    changes.append(f"✅ تمت الموافقة من قبل: {new_value}")
+                elif key == 'ملاحظات إضافية':
+                    changes.append(f"💬 ملاحظات جديدة: {new_value}")
+                elif key == 'آخر إجراء':
+                    changes.append(f"🔄 آخر إجراء: {new_value}")
                 else:
-                    changes.append(f"📝 تم تحديث {key} إلى '{new_value}'")
+                    changes.append(f"📝 {key}: {new_value}")
 
         user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
         if changes:
             user_message += "\n".join(changes)
         else:
             user_message += "تم تحديث بيانات المعاملة.\n"
-
         user_message += f"\n🔍 لمتابعة كل التغييرات اضغط الزر أدناه."
 
         changes_str = ', '.join(updates.keys())
-        sheets_client.add_history_entry(id, f"تم تحديث الحقول: {changes_str}", employee_name)
+        sheets_client.add_history_entry(id, f"تحديث: {changes_str}", employee_name)
 
         if background_loop and bot_app:
             asyncio.run_coroutine_threadsafe(
@@ -1117,18 +889,14 @@ def api_transaction(id):
 def api_transaction_history(id):
     if not sheets_client:
         return jsonify([])
-    try:
-        ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
-        if not ws:
-            return jsonify([])
-        records = ws.get_all_records()
-        history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
-                   for r in records if str(r.get('ID')) == id]
-        history.sort(key=lambda x: x['time'], reverse=True)
-        return jsonify(history)
-    except Exception as e:
-        logger.error(f"خطأ في جلب التاريخ: {e}")
+    ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+    if not ws:
         return jsonify([])
+    records = ws.get_all_records()
+    history = [{'time': r.get('timestamp', ''), 'action': r.get('action', ''), 'user': r.get('user', '')}
+               for r in records if str(r.get('ID')) == id]
+    history.sort(key=lambda x: x['time'], reverse=True)
+    return jsonify(history)
 
 # ------------------ صفحة التحقق بالبريد (مع القائمة البيضاء والجلسة) ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
@@ -1146,7 +914,6 @@ def verify_email_page():
         if not email:
             return "الرجاء إدخال البريد الإلكتروني", 400
 
-        # التحقق من صيغة البريد
         if not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
             return "صيغة البريد الإلكتروني غير صحيحة", 400
 
@@ -1376,9 +1143,7 @@ EDIT_HTML = """
 def edit_transaction_page(id):
     # التحقق من وجود جلسة تحقق سارية لهذه المعاملة
     if not session.get('verified_email') or session.get('verified_transaction') != id:
-        # لم يتم التحقق بعد، نعيد التوجيه إلى صفحة التحقق
         return redirect(url_for('verify_email_page', transaction_id=id))
-    # تم التحقق، نعرض صفحة التعديل
     return render_template_string(EDIT_HTML)
 
 # ------------------ صفحة المدير ------------------
@@ -1424,7 +1189,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                    <tr>
+                    </table>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -1450,7 +1215,7 @@ INDEX_HTML = """<!DOCTYPE html>
             const tbody = document.getElementById('transactions');
             data.forEach(t => {
                 const statusClass = getStatusClass(t.status);
-                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></td><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></tr>`;
+                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></td><td>${t.employee || '—'}</td><td>${t.department || '—'}<td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></tr>`;
                 tbody.innerHTML += row;
             });
         });
