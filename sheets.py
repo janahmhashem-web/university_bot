@@ -17,13 +17,11 @@ import threading
 logger = logging.getLogger(__name__)
 
 class GoogleSheetsClient:
-    # ذاكرة مؤقتة
     _headers_cache = None
     _headers_cache_time = None
     _department_sheets_cache = {}
     _department_archive_cache = {}
 
-    # إضافات للأداء العالي
     _batch_queue = deque()
     _batch_lock = threading.Lock()
     _batch_thread = None
@@ -45,7 +43,7 @@ class GoogleSheetsClient:
             self.client = gspread.authorize(creds)
             from config import Config
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
-            logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
+            logger.info("✅ تم الاتصال بـ Google Sheets")
             time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
@@ -54,7 +52,7 @@ class GoogleSheetsClient:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
-    # ================== دوال التحكم في معدل الكتابة ==================
+    # ------------------ دوال التحكم في معدل الكتابة ------------------
     def _wait_for_write_rate(self):
         with self._write_rate_lock:
             while len(self._write_timestamps) >= self.WRITE_RATE_LIMIT:
@@ -68,7 +66,7 @@ class GoogleSheetsClient:
                     self._write_timestamps.popleft()
             self._write_timestamps.append(time.time())
 
-    # ================== نظام الكتابة المجمعة (Batch) مع إصلاح الصيغ ==================
+    # ------------------ نظام الكتابة المجمعة (Batch) مع إصلاح الصيغ ------------------
     def _start_batch_worker(self):
         def worker():
             while not self._batch_stop:
@@ -83,22 +81,20 @@ class GoogleSheetsClient:
         self._batch_thread.start()
 
     def _fix_formula_cells(self, worksheet, start_row, rows_data):
-        """
-        تصحيح الخلايا التي تبدأ بـ '=' في الصفوف المدرجة
-        """
+        """تصحيح الخلايا التي تبدأ بـ '=' في الصفوف المدرجة"""
         try:
             for offset, row_data in enumerate(rows_data):
                 current_row = start_row + offset
                 for col_idx, value in enumerate(row_data, start=1):
                     if isinstance(value, str) and value.startswith('='):
                         cell_addr = gspread.utils.rowcol_to_a1(current_row, col_idx)
-                        # تحديث الخلية بالصيغة مباشرة
-                        worksheet.update_acell(cell_addr, value, value_input_option='USER_ENTERED')
+                        # استخدام update بدلاً من update_acell (يدعم value_input_option)
+                        worksheet.update(cell_addr, value, value_input_option='USER_ENTERED')
                         # فحص إضافي: إذا بقيت علامة اقتباس نزيلها
                         cell_value = worksheet.acell(cell_addr).value
                         if cell_value and isinstance(cell_value, str) and cell_value.startswith("'="):
                             clean = cell_value[1:]
-                            worksheet.update_acell(cell_addr, clean, value_input_option='USER_ENTERED')
+                            worksheet.update(cell_addr, clean, value_input_option='USER_ENTERED')
                             logger.debug(f"✅ تمت إزالة علامة الاقتباس من الخلية {cell_addr}")
         except Exception as e:
             logger.error(f"خطأ في إصلاح الصيغ: {e}")
@@ -120,9 +116,7 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    # إدراج الصفوف كقيم عادية (RAW) لتجنب علامات الاقتباس التلقائية
                     ws.insert_rows(rows, next_row, value_input_option='RAW')
-                    # إصلاح الخلايا التي تحتوي على صيغ
                     self._fix_formula_cells(ws, next_row, rows)
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
@@ -157,9 +151,7 @@ class GoogleSheetsClient:
 
             all_values = worksheet.get_all_values()
             next_row = len(all_values) + 1
-            # إدراج الصف كقيم عادية (RAW)
             worksheet.insert_row(row_data, next_row, value_input_option='RAW')
-            # إصلاح الخلايا التي تحتوي على صيغ
             self._fix_formula_cells(worksheet, next_row, [row_data])
             logger.debug(f"✅ تم إدراج صف جديد في الصف {next_row}")
             return True
@@ -174,7 +166,7 @@ class GoogleSheetsClient:
             self._wait_for_write_rate()
             return self._safe_append_row_single(worksheet, row_data)
 
-    # ================== دوال التهيئة والأوراق ==================
+    # ------------------ دوال التهيئة والأوراق ------------------
     def _init_sheets(self):
         from config import Config
 
@@ -231,6 +223,25 @@ class GoogleSheetsClient:
                     logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
                     break
 
+    # ------------------ دوال القائمة البيضاء ------------------
+    def is_email_allowed(self, email: str) -> bool:
+        try:
+            from config import Config
+            ws = self.get_worksheet(Config.SHEET_ALLOWED_EMAILS)
+            if not ws:
+                logger.warning("⚠️ ورقة allowed_emails غير موجودة، سيتم رفض كل الإيميلات")
+                return False
+            records = ws.get_all_records()
+            email_lower = email.strip().lower()
+            for row in records:
+                if row.get('email', '').strip().lower() == email_lower:
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
+            return False
+
+    # ------------------ دوال مساعدة عامة ------------------
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -243,7 +254,6 @@ class GoogleSheetsClient:
             return ws.get_all_records()
         return []
 
-    # ================== الدوال السريعة ==================
     def get_headers_cached(self):
         if (self._headers_cache is None or 
             (datetime.now() - self._headers_cache_time).seconds > 300):
@@ -300,7 +310,7 @@ class GoogleSheetsClient:
                 return row
         return None
 
-    # ================== دوال إدارة شيتات الأقسام ==================
+    # ------------------ دوال إدارة شيتات الأقسام ------------------
     def _sanitize_sheet_name(self, name):
         name = re.sub(r'[\\/*?:\[\]]', '_', name)
         name = name[:100]
@@ -437,7 +447,7 @@ class GoogleSheetsClient:
                 logger.error(f"فشل إضافة المعاملة إلى أرشيف القسم {department_name}: {e}")
         return False
 
-    # ================== الدوال الأساسية ==================
+    # ------------------ الدوال الأساسية ------------------
     def add_history_entry(self, transaction_id, action, user="النظام"):
         try:
             ws = self.get_worksheet('history')
@@ -595,7 +605,7 @@ class GoogleSheetsClient:
             logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}")
             return False
 
-    # ================== دوال الإحصائيات المتقدمة للمدير ==================
+    # ------------------ دوال الإحصائيات المتقدمة ------------------
     def get_distinct_departments(self):
         records = self.get_latest_transactions_fast('manager')
         return sorted(set(r.get('القسم', '').strip() for r in records if r.get('القسم')))
@@ -661,7 +671,7 @@ class GoogleSheetsClient:
                 workload[dept]['delayed'] += 1
         return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
 
-    # ================== رفع الملفات ==================
+    # ------------------ رفع الملفات ------------------
     def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
             folder_id = self._get_or_create_folder(folder_name)
