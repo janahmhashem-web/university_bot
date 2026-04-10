@@ -68,7 +68,7 @@ class GoogleSheetsClient:
                     self._write_timestamps.popleft()
             self._write_timestamps.append(time.time())
 
-    # ================== نظام الكتابة المجمعة (Batch) ==================
+    # ================== نظام الكتابة المجمعة (Batch) مع حل مشكلة الاقتباس ==================
     def _start_batch_worker(self):
         def worker():
             while not self._batch_stop:
@@ -83,7 +83,6 @@ class GoogleSheetsClient:
         self._batch_thread.start()
 
     def _execute_batch(self, batch_items):
-        """تنفيذ دفعة من الإدراجات مع تجنب علامة الاقتباس"""
         if not batch_items:
             return
         self._wait_for_write_rate()
@@ -100,9 +99,9 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    # إدراج الصفوف كقيم عادية (RAW) لمنع إضافة علامات الاقتباس
+                    # 1. إدراج الصفوف كقيم عادية (RAW) - يمنع إضافة علامة الاقتباس
                     ws.insert_rows(rows, next_row, value_input_option='RAW')
-                    # تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =)
+                    # 2. تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =) باستخدام USER_ENTERED
                     for offset, row_data in enumerate(rows):
                         current_row = next_row + offset
                         for col_idx, value in enumerate(row_data, start=1):
@@ -113,7 +112,6 @@ class GoogleSheetsClient:
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
             logger.error(f"❌ Batch insert failed: {e}")
-            # في حال فشل الدفعة، نعيد المحاولة كعمليات فردية
             for item in batch_items:
                 self._safe_append_row_single(item['worksheet'], item['row_data'])
 
@@ -146,10 +144,10 @@ class GoogleSheetsClient:
             all_values = worksheet.get_all_values()
             next_row = len(all_values) + 1
 
-            # إدراج الصف كقيم عادية (RAW)
+            # 1. إدراج الصف كقيم عادية (RAW)
             worksheet.insert_row(row_data, next_row, value_input_option='RAW')
 
-            # تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =)
+            # 2. تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =)
             for col_idx, value in enumerate(row_data, start=1):
                 if isinstance(value, str) and value.startswith('='):
                     cell_addr = gspread.utils.rowcol_to_a1(next_row, col_idx)
@@ -163,11 +161,6 @@ class GoogleSheetsClient:
             return False
 
     def safe_append_row(self, worksheet, row_data, batch=True):
-        """
-        إضافة صف جديد بشكل آمن (بدون علامة اقتباس).
-        إذا كان batch=True (افتراضي) يتم إضافة الصف إلى قائمة الانتظار للتجميع.
-        إذا كان batch=False يتم الإدراج فوراً مع احترام حد المعدل.
-        """
         if batch:
             return self.queue_append_row(worksheet, row_data)
         else:
@@ -234,7 +227,6 @@ class GoogleSheetsClient:
 
     # ================== دوال القائمة البيضاء ==================
     def is_email_allowed(self, email: str) -> bool:
-        """التحقق من وجود البريد الإلكتروني في ورقة allowed_emails"""
         try:
             from config import Config
             ws = self.get_worksheet(Config.SHEET_ALLOWED_EMAILS)
@@ -399,6 +391,7 @@ class GoogleSheetsClient:
             logger.info(f"✅ تم إضافة المعاملة {transaction_id} إلى شيت القسم {department_name}")
             return True
 
+    # ================== دوال الأرشفة (مختصرة) ==================
     def get_or_create_department_archive_cached(self, department_name):
         archive_name = f"أرشيف_{self._sanitize_sheet_name(department_name)}"
         if archive_name in self._department_archive_cache:
