@@ -83,6 +83,7 @@ class GoogleSheetsClient:
         self._batch_thread.start()
 
     def _execute_batch(self, batch_items):
+        """تنفيذ دفعة من الإدراجات مع تجنب علامة الاقتباس"""
         if not batch_items:
             return
         self._wait_for_write_rate()
@@ -99,18 +100,20 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    # إدراج الصفوف أولاً كقيم عادية (RAW) لمنع إضافة علامات الاقتباس
+                    # إدراج الصفوف كقيم عادية (RAW) لمنع إضافة علامات الاقتباس
                     ws.insert_rows(rows, next_row, value_input_option='RAW')
-                    # بعد الإدراج، نحدث الخلايا التي تحتوي على صيغ
+                    # تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =)
                     for offset, row_data in enumerate(rows):
                         current_row = next_row + offset
                         for col_idx, value in enumerate(row_data, start=1):
                             if isinstance(value, str) and value.startswith('='):
                                 cell_addr = gspread.utils.rowcol_to_a1(current_row, col_idx)
                                 ws.update_acell(cell_addr, value, value_input_option='USER_ENTERED')
+                                logger.debug(f"✅ تم تحديث الصيغة في الخلية {cell_addr}")
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
             logger.error(f"❌ Batch insert failed: {e}")
+            # في حال فشل الدفعة، نعيد المحاولة كعمليات فردية
             for item in batch_items:
                 self._safe_append_row_single(item['worksheet'], item['row_data'])
 
@@ -129,6 +132,7 @@ class GoogleSheetsClient:
             return False
 
     def _safe_append_row_single(self, worksheet, row_data):
+        """إدراج صف واحد فوراً مع تجنب علامة الاقتباس"""
         try:
             existing_headers = worksheet.row_values(1)
             if not existing_headers:
@@ -141,13 +145,17 @@ class GoogleSheetsClient:
 
             all_values = worksheet.get_all_values()
             next_row = len(all_values) + 1
-            # إدراج الصف كقيم عادية أولاً
+
+            # إدراج الصف كقيم عادية (RAW)
             worksheet.insert_row(row_data, next_row, value_input_option='RAW')
-            # تحديث الخلايا التي تحتوي على صيغ
+
+            # تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =)
             for col_idx, value in enumerate(row_data, start=1):
                 if isinstance(value, str) and value.startswith('='):
                     cell_addr = gspread.utils.rowcol_to_a1(next_row, col_idx)
                     worksheet.update_acell(cell_addr, value, value_input_option='USER_ENTERED')
+                    logger.debug(f"✅ تم تحديث الصيغة في الخلية {cell_addr}")
+
             logger.debug(f"✅ تم إدراج صف جديد في الصف {next_row}")
             return True
         except Exception as e:
@@ -155,6 +163,11 @@ class GoogleSheetsClient:
             return False
 
     def safe_append_row(self, worksheet, row_data, batch=True):
+        """
+        إضافة صف جديد بشكل آمن (بدون علامة اقتباس).
+        إذا كان batch=True (افتراضي) يتم إضافة الصف إلى قائمة الانتظار للتجميع.
+        إذا كان batch=False يتم الإدراج فوراً مع احترام حد المعدل.
+        """
         if batch:
             return self.queue_append_row(worksheet, row_data)
         else:
@@ -187,7 +200,7 @@ class GoogleSheetsClient:
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON", "تاريخ_الأرشفة"
             ],
             Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"],
-            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]   # ✅ ورقة القائمة البيضاء
+            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -238,7 +251,7 @@ class GoogleSheetsClient:
             logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
             return False
 
-    # ================== الدوال العامة (قراءة وكتابة) ==================
+    # ================== دوال مساعدة عامة ==================
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -307,7 +320,7 @@ class GoogleSheetsClient:
                 return row
         return None
 
-    # ================== دوال إدارة شيتات الأقسام (مختصرة) ==================
+    # ================== دوال إدارة شيتات الأقسام ==================
     def _sanitize_sheet_name(self, name):
         name = re.sub(r'[\\/*?:\[\]]', '_', name)
         name = name[:100]
@@ -386,7 +399,6 @@ class GoogleSheetsClient:
             logger.info(f"✅ تم إضافة المعاملة {transaction_id} إلى شيت القسم {department_name}")
             return True
 
-    # ================== دوال الأرشفة (مختصرة) ==================
     def get_or_create_department_archive_cached(self, department_name):
         archive_name = f"أرشيف_{self._sanitize_sheet_name(department_name)}"
         if archive_name in self._department_archive_cache:
