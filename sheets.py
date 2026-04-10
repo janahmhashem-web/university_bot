@@ -116,7 +116,7 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    ws.insert_rows(rows, next_row, value_input_option='RAW')
+                    ws.insert_rows(rows, next_row, value_input_option='USER_ENTERED')
                     self._fix_formula_cells(ws, next_row, rows)
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
