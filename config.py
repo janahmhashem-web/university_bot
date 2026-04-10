@@ -23,6 +23,7 @@ class Config:
     SHEET_ACCESS_TOKENS = os.getenv('SHEET_ACCESS_TOKENS', 'access_tokens')
     SHEET_ARCHIVE_MANAGER = os.getenv('SHEET_ARCHIVE_MANAGER', 'archive_manager')
     SHEET_ARCHIVE_HISTORY = os.getenv('SHEET_ARCHIVE_HISTORY', 'archive_history')
+    SHEET_ALLOWED_EMAILS = os.getenv('SHEET_ALLOWED_EMAILS', 'allowed_emails')   # ✅ ورقة القائمة البيضاء
 
     # Email (اختياري)
     EMAIL_USER = os.getenv('EMAIL_USER')
