@@ -45,7 +45,7 @@ class GoogleSheetsClient:
             self.client = gspread.authorize(creds)
             from config import Config
             self.spreadsheet = self.client.open_by_key(Config.SPREADSHEET_ID)
-            logger.info("✅ تم الاتصال بـ Google Sheets")
+            logger.info("✅ تم الاتصال بـ Google Sheets (بواسطة المعرف)")
             time.sleep(random.uniform(0.5, 2.0))
             self._init_sheets()
             self.drive_service = build('drive', 'v3', credentials=creds)
@@ -68,7 +68,7 @@ class GoogleSheetsClient:
                     self._write_timestamps.popleft()
             self._write_timestamps.append(time.time())
 
-    # ================== نظام الكتابة المجمعة (Batch) مع حل مشكلة الاقتباس ==================
+    # ================== نظام الكتابة المجمعة (Batch) مع إصلاح الصيغ ==================
     def _start_batch_worker(self):
         def worker():
             while not self._batch_stop:
@@ -81,6 +81,27 @@ class GoogleSheetsClient:
                     self._execute_batch(batch)
         self._batch_thread = threading.Thread(target=worker, daemon=True)
         self._batch_thread.start()
+
+    def _fix_formula_cells(self, worksheet, start_row, rows_data):
+        """
+        تصحيح الخلايا التي تبدأ بـ '=' في الصفوف المدرجة
+        """
+        try:
+            for offset, row_data in enumerate(rows_data):
+                current_row = start_row + offset
+                for col_idx, value in enumerate(row_data, start=1):
+                    if isinstance(value, str) and value.startswith('='):
+                        cell_addr = gspread.utils.rowcol_to_a1(current_row, col_idx)
+                        # تحديث الخلية بالصيغة مباشرة
+                        worksheet.update_acell(cell_addr, value, value_input_option='USER_ENTERED')
+                        # فحص إضافي: إذا بقيت علامة اقتباس نزيلها
+                        cell_value = worksheet.acell(cell_addr).value
+                        if cell_value and isinstance(cell_value, str) and cell_value.startswith("'="):
+                            clean = cell_value[1:]
+                            worksheet.update_acell(cell_addr, clean, value_input_option='USER_ENTERED')
+                            logger.debug(f"✅ تمت إزالة علامة الاقتباس من الخلية {cell_addr}")
+        except Exception as e:
+            logger.error(f"خطأ في إصلاح الصيغ: {e}")
 
     def _execute_batch(self, batch_items):
         if not batch_items:
@@ -99,16 +120,10 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    # 1. إدراج الصفوف كقيم عادية (RAW) - يمنع إضافة علامة الاقتباس
+                    # إدراج الصفوف كقيم عادية (RAW) لتجنب علامات الاقتباس التلقائية
                     ws.insert_rows(rows, next_row, value_input_option='RAW')
-                    # 2. تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =) باستخدام USER_ENTERED
-                    for offset, row_data in enumerate(rows):
-                        current_row = next_row + offset
-                        for col_idx, value in enumerate(row_data, start=1):
-                            if isinstance(value, str) and value.startswith('='):
-                                cell_addr = gspread.utils.rowcol_to_a1(current_row, col_idx)
-                                ws.update_acell(cell_addr, value, value_input_option='USER_ENTERED')
-                                logger.debug(f"✅ تم تحديث الصيغة في الخلية {cell_addr}")
+                    # إصلاح الخلايا التي تحتوي على صيغ
+                    self._fix_formula_cells(ws, next_row, rows)
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
             logger.error(f"❌ Batch insert failed: {e}")
@@ -130,7 +145,6 @@ class GoogleSheetsClient:
             return False
 
     def _safe_append_row_single(self, worksheet, row_data):
-        """إدراج صف واحد فوراً مع تجنب علامة الاقتباس"""
         try:
             existing_headers = worksheet.row_values(1)
             if not existing_headers:
@@ -143,17 +157,10 @@ class GoogleSheetsClient:
 
             all_values = worksheet.get_all_values()
             next_row = len(all_values) + 1
-
-            # 1. إدراج الصف كقيم عادية (RAW)
+            # إدراج الصف كقيم عادية (RAW)
             worksheet.insert_row(row_data, next_row, value_input_option='RAW')
-
-            # 2. تحديث الخلايا التي تحتوي على صيغ (تبدأ بـ =)
-            for col_idx, value in enumerate(row_data, start=1):
-                if isinstance(value, str) and value.startswith('='):
-                    cell_addr = gspread.utils.rowcol_to_a1(next_row, col_idx)
-                    worksheet.update_acell(cell_addr, value, value_input_option='USER_ENTERED')
-                    logger.debug(f"✅ تم تحديث الصيغة في الخلية {cell_addr}")
-
+            # إصلاح الخلايا التي تحتوي على صيغ
+            self._fix_formula_cells(worksheet, next_row, [row_data])
             logger.debug(f"✅ تم إدراج صف جديد في الصف {next_row}")
             return True
         except Exception as e:
@@ -192,8 +199,7 @@ class GoogleSheetsClient:
                 "المستمسكات المطلوبة", "الرابط", "آخر تعديل بواسطة", "آخر تعديل بتاريخ",
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON", "تاريخ_الأرشفة"
             ],
-            Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"],
-            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]
+            Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -225,25 +231,6 @@ class GoogleSheetsClient:
                     logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
                     break
 
-    # ================== دوال القائمة البيضاء ==================
-    def is_email_allowed(self, email: str) -> bool:
-        try:
-            from config import Config
-            ws = self.get_worksheet(Config.SHEET_ALLOWED_EMAILS)
-            if not ws:
-                logger.warning("⚠️ ورقة allowed_emails غير موجودة، سيتم رفض كل الإيميلات")
-                return False
-            records = ws.get_all_records()
-            email_lower = email.strip().lower()
-            for row in records:
-                if row.get('email', '').strip().lower() == email_lower:
-                    return True
-            return False
-        except Exception as e:
-            logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
-            return False
-
-    # ================== دوال مساعدة عامة ==================
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -256,6 +243,7 @@ class GoogleSheetsClient:
             return ws.get_all_records()
         return []
 
+    # ================== الدوال السريعة ==================
     def get_headers_cached(self):
         if (self._headers_cache is None or 
             (datetime.now() - self._headers_cache_time).seconds > 300):
@@ -391,7 +379,6 @@ class GoogleSheetsClient:
             logger.info(f"✅ تم إضافة المعاملة {transaction_id} إلى شيت القسم {department_name}")
             return True
 
-    # ================== دوال الأرشفة (مختصرة) ==================
     def get_or_create_department_archive_cached(self, department_name):
         archive_name = f"أرشيف_{self._sanitize_sheet_name(department_name)}"
         if archive_name in self._department_archive_cache:
@@ -461,173 +448,6 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
-    def archive_transaction(self, transaction_id, department_name=None):
-        try:
-            ws_manager = self.get_worksheet('manager')
-            if not ws_manager:
-                return False
-            latest_data = self.get_latest_row_by_id_fast('manager', transaction_id)
-            if not latest_data:
-                return False
-            archive_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            latest_data['تاريخ_الأرشفة'] = archive_time
-
-            ws_archive_manager = self.get_worksheet('archive_manager')
-            if not ws_archive_manager:
-                return False
-            headers = ws_archive_manager.row_values(1)
-            new_row = [latest_data.get(header, '') for header in headers]
-            self.safe_append_row(ws_archive_manager, new_row, batch=True)
-
-            all_rows = ws_manager.get_all_values()
-            headers_mgr = ws_manager.row_values(1)
-            id_col = None
-            try:
-                id_col = headers_mgr.index('ID') + 1
-            except ValueError:
-                pass
-            if id_col:
-                rows_to_delete = []
-                for i, row in enumerate(all_rows):
-                    if i == 0: continue
-                    if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
-                        rows_to_delete.append(i+1)
-                for row_num in sorted(rows_to_delete, reverse=True):
-                    ws_manager.delete_row(row_num)
-
-            if department_name:
-                dept_headers = self.get_or_create_department_sheet_cached(department_name).row_values(1)
-                dept_row = [latest_data.get(header, '') for header in dept_headers]
-                self.archive_from_department(transaction_id, department_name, dept_row, archive_time)
-
-            ws_history = self.get_worksheet('history')
-            if ws_history:
-                records = ws_history.get_all_records()
-                history_rows = [r for r in records if str(r.get('ID')) == str(transaction_id)]
-                ws_archive_history = self.get_worksheet('archive_history')
-                if ws_archive_history:
-                    arch_headers = ws_archive_history.row_values(1)
-                    for hist in history_rows:
-                        hist['تاريخ_الأرشفة'] = archive_time
-                        arch_row = [hist.get(header, '') for header in arch_headers]
-                        self.safe_append_row(ws_archive_history, arch_row, batch=True)
-                    rows_to_delete = []
-                    for i, r in enumerate(records):
-                        if str(r.get('ID')) == str(transaction_id):
-                            rows_to_delete.append(i+2)
-                    for row_num in sorted(rows_to_delete, reverse=True):
-                        ws_history.delete_row(row_num)
-            return True
-        except Exception as e:
-            logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}")
-            return False
-
-    # ================== دوال الإحصائيات المتقدمة ==================
-    def get_distinct_departments(self):
-        records = self.get_latest_transactions_fast('manager')
-        return sorted(set(r.get('القسم', '').strip() for r in records if r.get('القسم')))
-
-    def get_distinct_employees(self):
-        records = self.get_latest_transactions_fast('manager')
-        return sorted(set(r.get('الموظف المسؤول', '').strip() for r in records if r.get('الموظف المسؤول') and r.get('الموظف المسؤول') != 'غير معروف'))
-
-    def get_department_stats(self):
-        records = self.get_latest_transactions_fast('manager')
-        stats = {}
-        for r in records:
-            dept = r.get('القسم', 'غير محدد')
-            stats[dept] = stats.get(dept, 0) + 1
-        return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
-
-    def get_employee_stats(self):
-        records = self.get_latest_transactions_fast('manager')
-        stats = {}
-        for r in records:
-            emp = r.get('الموظف المسؤول', 'غير معروف')
-            stats[emp] = stats.get(emp, 0) + 1
-        return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
-
-    def get_status_distribution(self):
-        records = self.get_latest_transactions_fast('manager')
-        stats = {'جديد':0, 'قيد المعالجة':0, 'مكتملة':0, 'متأخرة':0, 'أخرى':0}
-        for r in records:
-            status = r.get('الحالة', 'أخرى')
-            stats[status] = stats.get(status, 0) + 1
-        return stats
-
-    def get_recent_transactions(self, limit=10):
-        return self.get_latest_transactions_sorted_fast('manager')[:limit]
-
-    def get_transactions_by_department(self, department):
-        return self.filter_transactions('manager', department=department)
-
-    def get_transactions_by_employee(self, employee):
-        return self.filter_transactions('manager', employee=employee)
-
-    def get_employee_workload(self):
-        records = self.get_latest_transactions_fast('manager')
-        workload = {}
-        for r in records:
-            emp = r.get('الموظف المسؤول', 'غير معروف')
-            if emp not in workload:
-                workload[emp] = {'total':0, 'delayed':0}
-            workload[emp]['total'] += 1
-            if r.get('التأخير') == 'نعم':
-                workload[emp]['delayed'] += 1
-        return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
-
-    def get_department_workload(self):
-        records = self.get_latest_transactions_fast('manager')
-        workload = {}
-        for r in records:
-            dept = r.get('القسم', 'غير محدد')
-            if dept not in workload:
-                workload[dept] = {'total':0, 'delayed':0}
-            workload[dept]['total'] += 1
-            if r.get('التأخير') == 'نعم':
-                workload[dept]['delayed'] += 1
-        return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
-
-    # ================== رفع الملفات إلى Drive ==================
-    def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
-        try:
-            folder_id = self._get_or_create_folder(folder_name)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
-                tmp.write(file_data)
-                tmp_path = tmp.name
-            media = MediaFileUpload(tmp_path, resumable=True)
-            file_metadata = {'name': filename, 'parents': [folder_id]}
-            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
-            file_id = file.get('id')
-            self.drive_service.permissions().create(
-                fileId=file_id,
-                body={'type': 'anyone', 'role': 'reader'}
-            ).execute()
-            os.unlink(tmp_path)
-            return f"https://drive.google.com/uc?export=view&id={file_id}"
-        except Exception as e:
-            logger.error(f"فشل رفع الملف إلى Drive: {e}")
-            return None
-
-    def _get_or_create_folder(self, folder_name):
-        try:
-            response = self.drive_service.files().list(
-                q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-                spaces='drive',
-                fields='files(id, name)'
-            ).execute()
-            folders = response.get('files', [])
-            if folders:
-                return folders[0]['id']
-            else:
-                folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-                folder = self.drive_service.files().create(body=folder_metadata, fields='id').execute()
-                return folder.get('id')
-        except Exception as e:
-            logger.error(f"فشل البحث/إنشاء المجلد: {e}")
-            raise
-
-    # ================== دوال التوكنات (للتوافق مع الكود القديم) ==================
     def generate_access_token(self, transaction_id, email, expiry_minutes=1440):
         try:
             ws = self.get_worksheet('access_tokens')
@@ -713,3 +533,169 @@ class GoogleSheetsClient:
 
     def verify_direct_token(self, token, transaction_id):
         return self.verify_access_token(token, transaction_id)
+
+    def archive_transaction(self, transaction_id, department_name=None):
+        try:
+            ws_manager = self.get_worksheet('manager')
+            if not ws_manager:
+                return False
+            latest_data = self.get_latest_row_by_id_fast('manager', transaction_id)
+            if not latest_data:
+                return False
+            archive_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            latest_data['تاريخ_الأرشفة'] = archive_time
+
+            ws_archive_manager = self.get_worksheet('archive_manager')
+            if not ws_archive_manager:
+                return False
+            headers = ws_archive_manager.row_values(1)
+            new_row = [latest_data.get(header, '') for header in headers]
+            self.safe_append_row(ws_archive_manager, new_row, batch=True)
+
+            all_rows = ws_manager.get_all_values()
+            headers_mgr = ws_manager.row_values(1)
+            id_col = None
+            try:
+                id_col = headers_mgr.index('ID') + 1
+            except ValueError:
+                pass
+            if id_col:
+                rows_to_delete = []
+                for i, row in enumerate(all_rows):
+                    if i == 0: continue
+                    if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
+                        rows_to_delete.append(i+1)
+                for row_num in sorted(rows_to_delete, reverse=True):
+                    ws_manager.delete_row(row_num)
+
+            if department_name:
+                dept_headers = self.get_or_create_department_sheet_cached(department_name).row_values(1)
+                dept_row = [latest_data.get(header, '') for header in dept_headers]
+                self.archive_from_department(transaction_id, department_name, dept_row, archive_time)
+
+            ws_history = self.get_worksheet('history')
+            if ws_history:
+                records = ws_history.get_all_records()
+                history_rows = [r for r in records if str(r.get('ID')) == str(transaction_id)]
+                ws_archive_history = self.get_worksheet('archive_history')
+                if ws_archive_history:
+                    arch_headers = ws_archive_history.row_values(1)
+                    for hist in history_rows:
+                        hist['تاريخ_الأرشفة'] = archive_time
+                        arch_row = [hist.get(header, '') for header in arch_headers]
+                        self.safe_append_row(ws_archive_history, arch_row, batch=True)
+                    rows_to_delete = []
+                    for i, r in enumerate(records):
+                        if str(r.get('ID')) == str(transaction_id):
+                            rows_to_delete.append(i+2)
+                    for row_num in sorted(rows_to_delete, reverse=True):
+                        ws_history.delete_row(row_num)
+            return True
+        except Exception as e:
+            logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}")
+            return False
+
+    # ================== دوال الإحصائيات المتقدمة للمدير ==================
+    def get_distinct_departments(self):
+        records = self.get_latest_transactions_fast('manager')
+        return sorted(set(r.get('القسم', '').strip() for r in records if r.get('القسم')))
+
+    def get_distinct_employees(self):
+        records = self.get_latest_transactions_fast('manager')
+        return sorted(set(r.get('الموظف المسؤول', '').strip() for r in records if r.get('الموظف المسؤول') and r.get('الموظف المسؤول') != 'غير معروف'))
+
+    def get_department_stats(self):
+        records = self.get_latest_transactions_fast('manager')
+        stats = {}
+        for r in records:
+            dept = r.get('القسم', 'غير محدد')
+            stats[dept] = stats.get(dept, 0) + 1
+        return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
+
+    def get_employee_stats(self):
+        records = self.get_latest_transactions_fast('manager')
+        stats = {}
+        for r in records:
+            emp = r.get('الموظف المسؤول', 'غير معروف')
+            stats[emp] = stats.get(emp, 0) + 1
+        return dict(sorted(stats.items(), key=lambda x: x[1], reverse=True))
+
+    def get_status_distribution(self):
+        records = self.get_latest_transactions_fast('manager')
+        stats = {'جديد':0, 'قيد المعالجة':0, 'مكتملة':0, 'متأخرة':0, 'أخرى':0}
+        for r in records:
+            status = r.get('الحالة', 'أخرى')
+            stats[status] = stats.get(status, 0) + 1
+        return stats
+
+    def get_recent_transactions(self, limit=10):
+        return self.get_latest_transactions_sorted_fast('manager')[:limit]
+
+    def get_transactions_by_department(self, department):
+        return self.filter_transactions('manager', department=department)
+
+    def get_transactions_by_employee(self, employee):
+        return self.filter_transactions('manager', employee=employee)
+
+    def get_employee_workload(self):
+        records = self.get_latest_transactions_fast('manager')
+        workload = {}
+        for r in records:
+            emp = r.get('الموظف المسؤول', 'غير معروف')
+            if emp not in workload:
+                workload[emp] = {'total':0, 'delayed':0}
+            workload[emp]['total'] += 1
+            if r.get('التأخير') == 'نعم':
+                workload[emp]['delayed'] += 1
+        return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
+
+    def get_department_workload(self):
+        records = self.get_latest_transactions_fast('manager')
+        workload = {}
+        for r in records:
+            dept = r.get('القسم', 'غير محدد')
+            if dept not in workload:
+                workload[dept] = {'total':0, 'delayed':0}
+            workload[dept]['total'] += 1
+            if r.get('التأخير') == 'نعم':
+                workload[dept]['delayed'] += 1
+        return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
+
+    # ================== رفع الملفات ==================
+    def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
+        try:
+            folder_id = self._get_or_create_folder(folder_name)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
+                tmp.write(file_data)
+                tmp_path = tmp.name
+            media = MediaFileUpload(tmp_path, resumable=True)
+            file_metadata = {'name': filename, 'parents': [folder_id]}
+            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            file_id = file.get('id')
+            self.drive_service.permissions().create(
+                fileId=file_id,
+                body={'type': 'anyone', 'role': 'reader'}
+            ).execute()
+            os.unlink(tmp_path)
+            return f"https://drive.google.com/uc?export=view&id={file_id}"
+        except Exception as e:
+            logger.error(f"فشل رفع الملف إلى Drive: {e}")
+            return None
+
+    def _get_or_create_folder(self, folder_name):
+        try:
+            response = self.drive_service.files().list(
+                q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            folders = response.get('files', [])
+            if folders:
+                return folders[0]['id']
+            else:
+                folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+                folder = self.drive_service.files().create(body=folder_metadata, fields='id').execute()
+                return folder.get('id')
+        except Exception as e:
+            logger.error(f"فشل البحث/إنشاء المجلد: {e}")
+            raise
