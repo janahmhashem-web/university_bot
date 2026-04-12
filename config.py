@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Config:
+    # ---------- إعدادات البوت ----------
     TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
     BOT_USERNAME = os.getenv('BOT_USERNAME')
     ADMIN_CHAT_ID = int(os.getenv('ADMIN_CHAT_ID', '0'))
@@ -11,10 +12,10 @@ class Config:
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
 
-    # Groq AI
+    # ---------- Groq AI ----------
     GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 
-    # Google Sheets
+    # ---------- Google Sheets ----------
     GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
     SHEET_MANAGER = os.getenv('SHEET_MANAGER', 'manager')
     SHEET_HISTORY = os.getenv('SHEET_HISTORY', 'history')
@@ -23,11 +24,26 @@ class Config:
     SHEET_ACCESS_TOKENS = os.getenv('SHEET_ACCESS_TOKENS', 'access_tokens')
     SHEET_ARCHIVE_MANAGER = os.getenv('SHEET_ARCHIVE_MANAGER', 'archive_manager')
     SHEET_ARCHIVE_HISTORY = os.getenv('SHEET_ARCHIVE_HISTORY', 'archive_history')
-    SHEET_ALLOWED_EMAILS = os.getenv('SHEET_ALLOWED_EMAILS', 'allowed_emails')   # ✅ ورقة القائمة البيضاء
+    SHEET_ALLOWED_EMAILS = os.getenv('SHEET_ALLOWED_EMAILS', 'allowed_emails')   # ✅ ورقة القائمة البيضاء للإيميلات الدائمة
 
-    # Email (اختياري)
-    EMAIL_USER = os.getenv('EMAIL_USER')
-    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
-    BREVO_SMTP_KEY = os.getenv('BREVO_SMTP_KEY')
+    # ---------- إعدادات البريد الإلكتروني (SMTP / Brevo) ----------
+    EMAIL_USER = os.getenv('EMAIL_USER')               # اختياري
+    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')       # اختياري
+    BREVO_SMTP_KEY = os.getenv('BREVO_SMTP_KEY')       # مفتاح Brevo SMTP
 
+    # ---------- وضع التصحيح ----------
     DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+
+    # ---------- التحقق من صحة المتغيرات الأساسية ----------
+    @classmethod
+    def validate(cls):
+        required_vars = [
+            'TELEGRAM_BOT_TOKEN',
+            'ADMIN_CHAT_ID',
+            'SPREADSHEET_ID',
+            'GOOGLE_CREDENTIALS_JSON'
+        ]
+        missing = [var for var in required_vars if not getattr(cls, var)]
+        if missing:
+            raise ValueError(f"المتغيرات البيئية التالية مفقودة: {', '.join(missing)}")
+        return True
