@@ -1293,11 +1293,11 @@ def register_transaction():
         .result.error{background:#fee2e2;color:#991b1b;display:block;}</style>
         </head>
         <body>
-        <div class="container"><div class="header"><h1>📝 تسجيل معاملة جديدة</h1><p>املأ البيانات التالية</p></div>
+        <div class="container"><div class="header"><h1>📝 إستمارة تسجيل معاملة </h1><p>املأ البيانات التالية</p></div>
         <div class="content"><div class="info-box">💡 بعد الإرسال سيتم إنشاء رقم معاملة فريد.</div>
         <form id="transactionForm" enctype="multipart/form-data">
-            <div class="form-group"><label class="required">الاسم الثلاثي</label><input type="text" id="name" name="name" required placeholder="مثال: أحمد محمد علي"></div>
-            <div class="form-group"><label class="required">رقم الهاتف</label><input type="text" id="phone" name="phone" required placeholder="07712345678"></div>
+            <div class="form-group"><label class="required">الاسم الثلاثي</label><input type="text" id="name" name="name" required placeholder="أكتب..."></div>
+            <div class="form-group"><label class="required">رقم الهاتف</label><input type="text" id="phone" name="phone" required placeholder="أكتب..."></div>
             <div class="form-group"><label class="required">الوظيفة</label><select id="function" name="function" required><option value="طالب">طالب</option><option value="تدريسي">تدريسي</option><option value="أخرى">أخرى</option></select></div>
             <div class="form-group"><label class="required">القسم</label><select id="department" name="department" required>
                 <option value="قسم تكنولوجيا المعلومات و الإتصالات">قسم تكنولوجيا المعلومات و الإتصالات</option>
@@ -1311,7 +1311,7 @@ def register_transaction():
                 <option value="قسم تقنيات الأجهزة الطبية">قسم تقنيات الأجهزة الطبية</option>
             </select></div>
             <div class="form-group"><label>نوع المعاملة</label><input type="text" id="transaction_type" name="transaction_type" placeholder="مثال: تتبع، استعلام، شكوى، اقتراح"></div>
-            <div class="form-group"><label>المرافقات (نص)</label><textarea id="attachments_text" name="attachments_text" rows="2" placeholder="أي ملاحظات إضافية..."></textarea></div>
+            <div class="form-group"><label>ملاحظات (اختياري) </label><textarea id="attachments_text" name="attachments_text" rows="2" placeholder="أي ملاحظات إضافية..."></textarea></div>
             <div class="form-group"><label>رفع ملف (اختياري)</label><input type="file" id="attachment_file" name="attachment_file"><small style="color:#6c757d;">سيتم رفع الملف إلى Drive.</small></div>
             <button type="submit" id="submitBtn">إرسال المعاملة</button>
         </form>
