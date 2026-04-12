@@ -88,9 +88,7 @@ class GoogleSheetsClient:
                 for col_idx, value in enumerate(row_data, start=1):
                     if isinstance(value, str) and value.startswith('='):
                         cell_addr = gspread.utils.rowcol_to_a1(current_row, col_idx)
-                        # استخدام update بدلاً من update_acell (يدعم value_input_option)
                         worksheet.update(cell_addr, value, value_input_option='USER_ENTERED')
-                        # فحص إضافي: إذا بقيت علامة اقتباس نزيلها
                         cell_value = worksheet.acell(cell_addr).value
                         if cell_value and isinstance(cell_value, str) and cell_value.startswith("'="):
                             clean = cell_value[1:]
@@ -223,7 +221,7 @@ class GoogleSheetsClient:
                     logger.error(f"❌ فشل إعداد الورقة {sheet_name}: {e}")
                     break
 
-    # ------------------ دوال القائمة البيضاء ------------------
+    # ------------------ دوال القائمة البيضاء (إيميل دائم) ------------------
     def is_email_allowed(self, email: str) -> bool:
         try:
             from config import Config
@@ -458,21 +456,33 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
-    def generate_access_token(self, transaction_id, email, expiry_minutes=1440):
+    # ------------------ دوال التوكنات (مع دعم الصلاحية غير المحدودة) ------------------
+    def generate_access_token(self, transaction_id, email, expiry_minutes=None):
+        """
+        توليد رمز وصول للمعاملة.
+        إذا expiry_minutes = None -> رمز لا ينتهي (يُخزن 'never').
+        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
                 logger.error("ورقة access_tokens غير موجودة")
                 return None
             token = uuid.uuid4().hex
-            expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
+            if expiry_minutes is None:
+                expires_at = "never"
+            else:
+                expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
             self.safe_append_row(ws, [token, transaction_id, email, expires_at], batch=True)
+            logger.info(f"✅ تم توليد رمز للمعاملة {transaction_id} للبريد {email} {'بدون انتهاء' if expiry_minutes is None else f'ينتهي بعد {expiry_minutes} دقيقة'}")
             return token
         except Exception as e:
             logger.error(f"فشل توليد رمز الوصول: {e}")
             return None
 
     def verify_access_token(self, token, transaction_id):
+        """
+        التحقق من رمز الوصول مع دعم القيمة 'never' للصلاحية غير المحدودة.
+        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
@@ -484,6 +494,9 @@ class GoogleSheetsClient:
                     expires_at_str = row.get('expires_at')
                     if not expires_at_str:
                         continue
+                    # دعم الصلاحية غير المحدودة
+                    if expires_at_str == "never":
+                        return True
                     try:
                         expires_at = datetime.fromisoformat(expires_at_str)
                     except ValueError:
@@ -511,7 +524,11 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إبطال رمز الوصول: {e}")
 
-    def get_direct_token(self, transaction_id, expiry_minutes=43200):
+    def get_direct_token(self, transaction_id, expiry_minutes=None):
+        """
+        توليد رمز مباشر (دون إيميل) مع دعم الصلاحية غير المحدودة.
+        expiry_minutes = None يعني لا انتهاء.
+        """
         try:
             ws = self.get_worksheet('access_tokens')
             if not ws:
@@ -519,10 +536,13 @@ class GoogleSheetsClient:
                 return None
             records = ws.get_all_records()
             now = datetime.now()
+            # البحث عن رمز موجود وغير منتهي
             for row in records:
                 if str(row.get('transaction_id')) == str(transaction_id):
                     expires_at_str = row.get('expires_at')
                     if expires_at_str:
+                        if expires_at_str == "never":
+                            return row.get('token')
                         try:
                             expires_at = datetime.fromisoformat(expires_at_str)
                         except ValueError:
@@ -532,10 +552,14 @@ class GoogleSheetsClient:
                                 continue
                         if expires_at > now:
                             return row.get('token')
+            # إنشاء رمز جديد
             token = uuid.uuid4().hex
-            expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
+            if expiry_minutes is None:
+                expires_at = "never"
+            else:
+                expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
             self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at], batch=True)
-            logger.info(f"✅ تم توليد رمز مباشر للمعاملة {transaction_id} ينتهي بعد {expiry_minutes} دقيقة")
+            logger.info(f"✅ تم توليد رمز مباشر {'بدون انتهاء' if expiry_minutes is None else f'ينتهي بعد {expiry_minutes} دقيقة'} للمعاملة {transaction_id}")
             return token
         except Exception as e:
             logger.error(f"فشل توليد رمز مباشر: {e}", exc_info=True)
@@ -544,6 +568,7 @@ class GoogleSheetsClient:
     def verify_direct_token(self, token, transaction_id):
         return self.verify_access_token(token, transaction_id)
 
+    # ------------------ دوال الأرشفة ------------------
     def archive_transaction(self, transaction_id, department_name=None):
         try:
             ws_manager = self.get_worksheet('manager')
