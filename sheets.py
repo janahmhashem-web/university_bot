@@ -66,7 +66,7 @@ class GoogleSheetsClient:
                     self._write_timestamps.popleft()
             self._write_timestamps.append(time.time())
 
-    # ------------------ نظام الكتابة المجمعة (Batch) مع إصلاح الصيغ ------------------
+    # ================== نظام الكتابة المجمعة (Batch) مع إصلاح الصيغ ==================
     def _start_batch_worker(self):
         def worker():
             while not self._batch_stop:
@@ -114,7 +114,7 @@ class GoogleSheetsClient:
                 if ws:
                     all_values = ws.get_all_values()
                     next_row = len(all_values) + 1
-                    ws.insert_rows(rows, next_row, value_input_option='USER_ENTERED')
+                    ws.insert_rows(rows, next_row, value_input_option='RAW')
                     self._fix_formula_cells(ws, next_row, rows)
                     logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
         except Exception as e:
@@ -190,7 +190,7 @@ class GoogleSheetsClient:
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON", "تاريخ_الأرشفة"
             ],
             Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"],
-            Config.SHEET_ALLOWED_EMAILS: ["email"]  # ✅ إضافة القائمة البيضاء تلقائياً
+            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -239,6 +239,111 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"خطأ في التحقق من البريد المسموح: {e}")
             return False
+
+    # ------------------ دوال التوكنات (مع دعم الصلاحية غير المحدودة) ------------------
+    def generate_access_token(self, transaction_id, email, expiry_minutes=None):
+        """
+        توليد رمز وصول للمعاملة.
+        إذا expiry_minutes = None -> رمز لا ينتهي (يُخزن 'never').
+        """
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
+                return None
+            token = uuid.uuid4().hex
+            if expiry_minutes is None:
+                expires_at = "never"
+            else:
+                expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
+            self.safe_append_row(ws, [token, transaction_id, email, expires_at], batch=True)
+            logger.info(f"✅ تم توليد رمز للمعاملة {transaction_id} للبريد {email} {'بدون انتهاء' if expiry_minutes is None else f'ينتهي بعد {expiry_minutes} دقيقة'}")
+            return token
+        except Exception as e:
+            logger.error(f"فشل توليد رمز الوصول: {e}")
+            return None
+
+    def verify_access_token(self, token, transaction_id):
+        """
+        التحقق من رمز الوصول مع دعم القيمة 'never' للصلاحية غير المحدودة.
+        """
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                return False
+            records = ws.get_all_records()
+            now = datetime.now()
+            for row in records:
+                if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at_str = row.get('expires_at')
+                    if not expires_at_str:
+                        continue
+                    if expires_at_str == "never":
+                        return True
+                    try:
+                        expires_at = datetime.fromisoformat(expires_at_str)
+                    except ValueError:
+                        try:
+                            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            continue
+                    if expires_at > now:
+                        return True
+            return False
+        except Exception as e:
+            logger.error(f"فشل التحقق من رمز الوصول: {e}")
+            return False
+
+    def revoke_access_token(self, token):
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                return
+            records = ws.get_all_records()
+            for idx, row in enumerate(records):
+                if row.get('token') == token:
+                    ws.delete_row(idx+2)
+                    break
+        except Exception as e:
+            logger.error(f"فشل إبطال رمز الوصول: {e}")
+
+    def get_direct_token(self, transaction_id, expiry_minutes=None):
+        try:
+            ws = self.get_worksheet('access_tokens')
+            if not ws:
+                logger.error("ورقة access_tokens غير موجودة")
+                return None
+            records = ws.get_all_records()
+            now = datetime.now()
+            for row in records:
+                if str(row.get('transaction_id')) == str(transaction_id):
+                    expires_at_str = row.get('expires_at')
+                    if expires_at_str:
+                        if expires_at_str == "never":
+                            return row.get('token')
+                        try:
+                            expires_at = datetime.fromisoformat(expires_at_str)
+                        except ValueError:
+                            try:
+                                expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+                            except ValueError:
+                                continue
+                        if expires_at > now:
+                            return row.get('token')
+            token = uuid.uuid4().hex
+            if expiry_minutes is None:
+                expires_at = "never"
+            else:
+                expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
+            self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at], batch=True)
+            logger.info(f"✅ تم توليد رمز مباشر {'بدون انتهاء' if expiry_minutes is None else f'ينتهي بعد {expiry_minutes} دقيقة'} للمعاملة {transaction_id}")
+            return token
+        except Exception as e:
+            logger.error(f"فشل توليد رمز مباشر: {e}", exc_info=True)
+            return None
+
+    def verify_direct_token(self, token, transaction_id):
+        return self.verify_access_token(token, transaction_id)
 
     # ------------------ دوال مساعدة عامة ------------------
     def get_worksheet(self, sheet_name):
@@ -457,192 +562,6 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
-    # ------------------ دوال التوكنات (مع دعم الصلاحية غير المحدودة والتجديد التلقائي) ------------------
-    def generate_access_token(self, transaction_id, email, expiry_minutes=None):
-        """
-        توليد رمز وصول للمعاملة.
-        إذا expiry_minutes = None -> رمز لا ينتهي (يُخزن 'never').
-        """
-        try:
-            ws = self.get_worksheet('access_tokens')
-            if not ws:
-                logger.error("ورقة access_tokens غير موجودة")
-                return None
-            token = uuid.uuid4().hex
-            if expiry_minutes is None:
-                expires_at = "never"
-            else:
-                expires_at = (datetime.now() + timedelta(minutes=expiry_minutes)).isoformat()
-            self.safe_append_row(ws, [token, transaction_id, email, expires_at], batch=True)
-            logger.info(f"✅ تم توليد رمز للمعاملة {transaction_id} للبريد {email} {'بدون انتهاء' if expiry_minutes is None else f'ينتهي بعد {expiry_minutes} دقيقة'}")
-            return token
-        except Exception as e:
-            logger.error(f"فشل توليد رمز الوصول: {e}")
-            return None
-
-    def verify_access_token(self, token, transaction_id):
-        """
-        التحقق من رمز الوصول مع دعم القيمة 'never' للصلاحية غير المحدودة.
-        """
-        try:
-            ws = self.get_worksheet('access_tokens')
-            if not ws:
-                return False
-            records = ws.get_all_records()
-            now = datetime.now()
-            for row in records:
-                if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
-                    expires_at_str = row.get('expires_at')
-                    if not expires_at_str:
-                        continue
-                    if expires_at_str == "never":
-                        return True
-                    try:
-                        expires_at = datetime.fromisoformat(expires_at_str)
-                    except ValueError:
-                        try:
-                            expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
-                        except ValueError:
-                            continue
-                    if expires_at > now:
-                        return True
-            return False
-        except Exception as e:
-            logger.error(f"فشل التحقق من رمز الوصول: {e}")
-            return False
-
-    def revoke_access_token(self, token):
-        try:
-            ws = self.get_worksheet('access_tokens')
-            if not ws:
-                return
-            records = ws.get_all_records()
-            for idx, row in enumerate(records):
-                if row.get('token') == token:
-                    ws.delete_row(idx+2)
-                    break
-        except Exception as e:
-            logger.error(f"فشل إبطال رمز الوصول: {e}")
-
-    def get_direct_token(self, transaction_id, expiry_minutes=None):
-        """
-        توليد رمز مباشر (دون إيميل) مع دعم الصلاحية غير المحدودة.
-        expiry_minutes = None يعني لا انتهاء.
-        """
-        try:
-            ws = self.get_worksheet('access_tokens')
-            if not ws:
-                logger.error("ورقة access_tokens غير موجودة")
-                return None
-            records = ws.get_all_records()
-            now = datetime.now()
-            for row in records:
-                if str(row.get('transaction_id')) == str(transaction_id):
-                    expires_at_str = row.get('expires_at')
-                    if expires_at_str:
-                        if expires_at_str == "never":
-                            return row.get('token')
-                        try:
-                            expires_at = datetime.fromisoformat(expires_at_str)
-                        except ValueError:
-                            try:
-                                expires_at = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
-                            except ValueError:
-                                continue
-                        if expires_at > now:
-                            return row.get('token')
-            token = uuid.uuid4().hex
-            if expiry_minutes is None:
-                expires_at = "never"
-            else:
-                expires_at = (now + timedelta(minutes=expiry_minutes)).isoformat()
-            self.safe_append_row(ws, [token, transaction_id, "direct@system.com", expires_at], batch=True)
-            logger.info(f"✅ تم توليد رمز مباشر {'بدون انتهاء' if expiry_minutes is None else f'ينتهي بعد {expiry_minutes} دقيقة'} للمعاملة {transaction_id}")
-            return token
-        except Exception as e:
-            logger.error(f"فشل توليد رمز مباشر: {e}", exc_info=True)
-            return None
-
-    def verify_direct_token(self, token, transaction_id):
-        return self.verify_access_token(token, transaction_id)
-
-    # ================== دوال تلقائية لإدارة التوكنات غير المنتهية ==================
-    def get_or_create_never_expiring_token(self, transaction_id, email=None):
-        """
-        الحصول على توكن لا ينتهي للمعاملة، وإنشاؤه تلقائياً إذا لم يكن موجوداً.
-        إرجاع (token, is_new) حيث is_new يشير إلى إنشاء جديد أم لا.
-        """
-        try:
-            ws = self.get_worksheet('access_tokens')
-            if not ws:
-                logger.error("ورقة access_tokens غير موجودة")
-                return None, False
-            
-            records = ws.get_all_records()
-            now = datetime.now()
-            existing_token = None
-            existing_row_index = None
-            
-            for idx, row in enumerate(records):
-                if str(row.get('transaction_id')) == str(transaction_id):
-                    if email and row.get('email') != email:
-                        continue
-                    expires_at_str = row.get('expires_at')
-                    if expires_at_str == "never":
-                        return row.get('token'), False
-                    try:
-                        expires_at = datetime.fromisoformat(expires_at_str) if 'T' in expires_at_str else datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
-                        if expires_at > now:
-                            return row.get('token'), False
-                        else:
-                            existing_token = row.get('token')
-                            existing_row_index = idx + 2
-                    except:
-                        pass
-            
-            if existing_row_index:
-                ws.delete_row(existing_row_index)
-                logger.info(f"🗑️ تم حذف التوكن المنتهي للمعاملة {transaction_id}")
-            
-            new_token = uuid.uuid4().hex
-            new_expires_at = "never"
-            target_email = email if email else "auto@system.com"
-            self.safe_append_row(ws, [new_token, transaction_id, target_email, new_expires_at], batch=True)
-            logger.info(f"✅ تم إنشاء توكن تلقائي لا ينتهي للمعاملة {transaction_id}")
-            return new_token, True
-            
-        except Exception as e:
-            logger.error(f"فشل في get_or_create_never_expiring_token: {e}")
-            return None, False
-
-    def auto_verify_token(self, token, transaction_id, auto_renew=True):
-        """
-        التحقق من التوكن مع إمكانية التجديد التلقائي إذا كان منتهياً.
-        إرجاع (is_valid, new_token) حيث new_token هو التوكن الجديد إذا تم تجديده.
-        """
-        is_valid = self.verify_access_token(token, transaction_id)
-        if is_valid:
-            return True, token
-        
-        if not auto_renew:
-            return False, None
-        
-        logger.info(f"🔄 محاولة تجديد التوكن للمعاملة {transaction_id}")
-        ws = self.get_worksheet('access_tokens')
-        email = None
-        if ws:
-            records = ws.get_all_records()
-            for row in records:
-                if row.get('token') == token and str(row.get('transaction_id')) == str(transaction_id):
-                    email = row.get('email')
-                    break
-        
-        new_token, created = self.get_or_create_never_expiring_token(transaction_id, email)
-        if created and new_token:
-            return True, new_token
-        return False, None
-
-    # ------------------ دوال الأرشفة ------------------
     def archive_transaction(self, transaction_id, department_name=None):
         try:
             ws_manager = self.get_worksheet('manager')
