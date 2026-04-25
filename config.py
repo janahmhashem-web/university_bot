@@ -47,3 +47,4 @@ class Config:
         if missing:
             raise ValueError(f"المتغيرات البيئية التالية مفقودة: {', '.join(missing)}")
         return True
+BOT_USERNAME = os.getenv('BOT_USERNAME', 'mtu_jit_bot')   # قيمة افتراضية إذا لم يُقرأ من البيئة
