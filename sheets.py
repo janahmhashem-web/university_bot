@@ -190,7 +190,12 @@ class GoogleSheetsClient:
                 "عدد التعديلات", "البريد الإلكتروني الموظف", "LOG_JSON", "تاريخ_الأرشفة"
             ],
             Config.SHEET_ARCHIVE_HISTORY: ["timestamp", "ID", "action", "user", "تاريخ_الأرشفة"],
-            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"]
+            Config.SHEET_ALLOWED_EMAILS: ["email", "name", "role"],
+            # أوراق التعلم الآلي والذاكرة
+            "ml_training_data": ["text", "label", "timestamp"],
+            "ml_feedback": ["timestamp", "user_id", "user_message", "ai_response", "helpful", "processed"],
+            "user_preferences": ["user_id", "preference", "value", "updated_at"],
+            "chat_history": ["timestamp", "user_id", "user_name", "user_message", "ai_response", "is_admin"]
         }
 
         for sheet_name, required_headers in sheets_required.items():
@@ -561,6 +566,50 @@ class GoogleSheetsClient:
                 self.safe_append_row(ws, [timestamp, transaction_id, action, user], batch=True)
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
+
+    def update_transaction_field(self, transaction_id, field_name, new_value):
+        """تحديث حقل واحد في المعاملة (مثل الحالة أو الموظف المسؤول)"""
+        try:
+            ws = self.get_worksheet('manager')
+            if not ws:
+                return False
+            headers = ws.row_values(1)
+            if field_name not in headers:
+                logger.error(f"الحقل {field_name} غير موجود")
+                return False
+            col = headers.index(field_name) + 1
+            # البحث عن الصف
+            all_rows = ws.get_all_values()
+            row_num = None
+            for i, row in enumerate(all_rows):
+                if i == 0:
+                    continue
+                # نفترض أن العمود الأول هو ID (أو نبحث بالطريقة القديمة)
+                if len(row) > 0 and str(row[0]) == str(transaction_id):
+                    row_num = i + 1
+                    break
+            if not row_num:
+                # محاولة البحث باستخدام عمود ID (قد لا يكون الأول)
+                id_col = None
+                for idx, h in enumerate(headers):
+                    if h == 'ID':
+                        id_col = idx + 1
+                        break
+                if id_col:
+                    for i, row in enumerate(all_rows):
+                        if i == 0:
+                            continue
+                        if len(row) >= id_col and str(row[id_col-1]) == str(transaction_id):
+                            row_num = i + 1
+                            break
+            if not row_num:
+                logger.error(f"لم أجد المعاملة {transaction_id}")
+                return False
+            ws.update_cell(row_num, col, new_value, value_input_option='USER_ENTERED')
+            return True
+        except Exception as e:
+            logger.error(f"خطأ في update_transaction_field: {e}")
+            return False
 
     def archive_transaction(self, transaction_id, department_name=None):
         try:
