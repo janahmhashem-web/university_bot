@@ -669,7 +669,6 @@ async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     score = context.args[0]
     helpful = score == "1"
     if ai_assistant:
-        # ملاحظة: نمرر رسائل وهمية لأننا لا نحفظ آخر محادثة بسهولة – يمكن تحسينها
         ai_assistant.record_feedback(
             user_id=update.effective_user.id,
             user_message="(تم التقييم عبر الأمر)",
@@ -1347,7 +1346,7 @@ INDEX_HTML = """<!DOCTYPE html>
             const tbody = document.getElementById('transactions');
             data.forEach(t => {
                 const statusClass = getStatusClass(t.status);
-                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></td><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></table>`;
+                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></table><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></tr>`;
                 tbody.innerHTML += row;
             });
         });
