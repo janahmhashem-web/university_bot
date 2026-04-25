@@ -51,14 +51,6 @@ def rate_limit_write():
 
 executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
-def get_domain_from_url(url):
-    url = url.rstrip('/')
-    if url.startswith('https://'):
-        return url[8:]
-    elif url.startswith('http://'):
-        return url[7:]
-    return url
-
 required_env_vars = ['GOOGLE_CREDENTIALS_JSON', 'SPREADSHEET_ID', 'TELEGRAM_BOT_TOKEN', 'WEB_APP_URL']
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 if missing_vars:
@@ -135,6 +127,7 @@ def save_user_chat(transaction_id, chat_id):
         logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
 def fix_transaction_link(transaction_id):
+    """إصلاح صيغة HYPERLINK إذا ظهرت بعلامة اقتباس"""
     try:
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
@@ -903,7 +896,6 @@ def api_transaction(id):
         if updates.get('الحالة') == 'مكتملة':
             if hasattr(sheets_client, 'archive_transaction'):
                 old_dept = old_data.get('القسم', '')
-                logger.info(f"أرشفة المعاملة {id} من القسم {old_dept}")
                 archive_success = sheets_client.archive_transaction(id, department_name=old_dept)
                 if archive_success:
                     return jsonify({'success': True, 'message': 'تم الحفظ والمعاملة مؤرشفة'})
@@ -926,7 +918,7 @@ def api_transaction_history(id):
     history.sort(key=lambda x: x['time'], reverse=True)
     return jsonify(history)
 
-# ------------------ صفحة التحقق بالبريد ------------------
+# ------------------ صفحة التحقق بالبريد (مع صلاحية دائمة) ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
 def verify_email_page():
     transaction_id = request.args.get('transaction_id')
@@ -939,13 +931,17 @@ def verify_email_page():
         email = request.form.get('email', '').strip()
         if not email:
             return "الرجاء إدخال البريد الإلكتروني", 400
-        if not email.endswith('@it.jan.ah'):
-            return f"🚫 غير مصرح: البريد الإلكتروني يجب أن ينتهي بـ @it.jan.ah", 403
-        token = sheets_client.generate_access_token(transaction_id, email)
+        if not re.match(r'^[^@]+@[^@]+\.[^@]+$', email):
+            return "صيغة البريد الإلكتروني غير صحيحة", 400
+        if not sheets_client.is_email_allowed(email):
+            return f"🚫 غير مصرح: البريد الإلكتروني {email} غير مسجل في النظام.", 403
+        # ✅ توليد توكن لا ينتهي (صلاحية دائمة)
+        token = sheets_client.generate_access_token(transaction_id, email, expiry_minutes=None)
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
         base_url = request.host_url.rstrip('/')
         edit_url = f"{base_url}/transaction/{transaction_id}?token={token}"
+        logger.info(f"✅ إعادة التوجيه إلى: {edit_url} (صلاحية دائمة)")
         return redirect(edit_url)
     return '''
     <!DOCTYPE html>
@@ -962,7 +958,7 @@ def verify_email_page():
     button:hover{transform:translateY(-2px);box-shadow:0 10px 20px -5px rgba(102,126,234,0.4);}
     .info{background:#f3f4f6;border-radius:32px;padding:14px;margin-bottom:20px;font-size:13px;text-align:center;color:#4b5563;}</style>
     </head>
-    <body><div class="card"><div class="header"><h1>🔐 التحقق من البريد</h1></div><div class="content"><div class="info">💡 أدخل بريدك الجامعي (@it.jan.ah) للوصول إلى صفحة تعديل المعاملة.</div>
+    <body><div class="card"><div class="header"><h1>🔐 التحقق من البريد</h1></div><div class="content"><div class="info">💡 أدخل بريدك المسجل في النظام للوصول إلى صفحة تعديل المعاملة (صلاحية دائمة).</div>
     <form method="POST"><input type="email" name="email" placeholder="example@it.jan.ah" required><button type="submit">تحقق</button></form></div></div></body></html>
     '''
 
@@ -1190,7 +1186,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                    </tr>
+                    </table>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
