@@ -61,6 +61,7 @@ else:
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 
+# ------------------ Google Sheets ------------------
 sheets_client = None
 try:
     sheets_client = GoogleSheetsClient()
@@ -69,12 +70,13 @@ except Exception as e:
     logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
     sheets_client = None
 
+# ------------------ الذكاء الاصطناعي المتطور ------------------
 ai_assistant = None
 try:
     ai_assistant = AIAssistant(sheets_client=sheets_client)
-    logger.info("✅ تم تهيئة Groq AI")
+    logger.info("✅ تم تهيئة Groq AI مع التعلم الآلي والذاكرة")
 except Exception as e:
-    logger.error(f"❌ فشل تهيئة Groq AI: {e}")
+    logger.error(f"❌ فشل تهيئة AI: {e}")
     ai_assistant = None
 
 if sheets_client:
@@ -85,6 +87,7 @@ if sheets_client:
     else:
         logger.error("❌ الورقة manager غير موجودة")
 
+# ------------------ دوال مساعدة عامة ------------------
 async def notify_user(transaction_id, message):
     if not sheets_client or not bot_app or not background_loop:
         return
@@ -127,7 +130,6 @@ def save_user_chat(transaction_id, chat_id):
         logger.error(f"فشل حفظ ربط المستخدم: {e}")
 
 def fix_transaction_link(transaction_id):
-    """إصلاح صيغة HYPERLINK إذا ظهرت بعلامة اقتباس"""
     try:
         ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
         if not ws:
@@ -201,10 +203,12 @@ def get_transactions_with_errors():
         result += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')} - {r.get('الحالة', '')}\n"
     return result
 
+# ------------------ دوال البوت الأساسية ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
     args = context.args
+
     if args:
         transaction_id = args[0]
         if sheets_client:
@@ -219,36 +223,86 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ النظام غير متصل بقاعدة البيانات.")
         return
-    keyboard = [
-        [InlineKeyboardButton("🔍 تفاصيل معاملة", callback_data="cmd_id")],
-        [InlineKeyboardButton("📜 سجل تتبع معاملة", callback_data="cmd_history")],
-        [InlineKeyboardButton("🔎 بحث عن معاملة", callback_data="cmd_search")],
+
+    # أزرار المستخدم العادي
+    user_keyboard = [
+        [InlineKeyboardButton("🔍 تفاصيل معاملتي", callback_data="my_id")],
+        [InlineKeyboardButton("📜 سجل تتبع معاملتي", callback_data="my_history")],
         [InlineKeyboardButton("📱 تعليمات QR", callback_data="cmd_qr")],
-        [InlineKeyboardButton("📊 تحليل معاملة", callback_data="cmd_analyze")],
-        [InlineKeyboardButton("💬 التواصل مع الدعم", callback_data="cmd_support")],
+        [InlineKeyboardButton("💬 الدعم الفني", callback_data="cmd_support")],
+        [InlineKeyboardButton("🤖 أسأل المساعد", callback_data="cmd_ai_chat")],
     ]
+    # أزرار المدير الإضافية
+    admin_keyboard = [
+        [InlineKeyboardButton("📊 إحصائيات متقدمة", callback_data="cmd_advanced_stats")],
+        [InlineKeyboardButton("🏢 إحصائيات الأقسام", callback_data="cmd_dept_stats")],
+        [InlineKeyboardButton("👥 إحصائيات الموظفين", callback_data="cmd_emp_stats")],
+        [InlineKeyboardButton("📈 توزيع الحالات", callback_data="cmd_status_dist")],
+        [InlineKeyboardButton("📋 آخر 10 معاملات", callback_data="cmd_recent")],
+        [InlineKeyboardButton("🔍 بحث متقدم", callback_data="cmd_advanced_search")],
+        [InlineKeyboardButton("⚙️ إدارة المعاملات", callback_data="cmd_admin_manage")],
+    ]
+
+    keyboard = user_keyboard
     if is_admin:
-        keyboard.append([InlineKeyboardButton("📊 إحصائيات متقدمة", callback_data="cmd_advanced_stats")])
-        keyboard.append([InlineKeyboardButton("🏢 إحصائيات الأقسام", callback_data="cmd_dept_stats")])
-        keyboard.append([InlineKeyboardButton("👥 إحصائيات الموظفين", callback_data="cmd_emp_stats")])
-        keyboard.append([InlineKeyboardButton("📈 توزيع الحالات", callback_data="cmd_status_dist")])
-        keyboard.append([InlineKeyboardButton("📋 آخر 10 معاملات", callback_data="cmd_recent")])
-        keyboard.append([InlineKeyboardButton("🔍 بحث متقدم", callback_data="cmd_advanced_search")])
+        keyboard.extend(admin_keyboard)
+
     reply_markup = InlineKeyboardMarkup(keyboard)
-    msg = "👋 *أهلاً بك في بوت متابعة المعاملات*\n\nيمكنك استخدام الأزرار أدناه."
+    msg = "👋 *أهلاً بك في نظام متابعة المعاملات*\n\n"
+    if is_admin:
+        msg += "👑 *أنت مدير* - لديك صلاحيات إضافية.\n"
+    else:
+        msg += "🔹 *أنت مستخدم عادي* - يمكنك متابعة معاملتك فقط.\n"
+    msg += "👇 استخدم الأزرار المناسبة."
     await update.message.reply_text(msg, parse_mode='Markdown', reply_markup=reply_markup)
+
+async def get_user_transaction_id(chat_id):
+    """استرجاع رقم المعاملة المرتبطة بالمستخدم"""
+    if not sheets_client:
+        return None
+    try:
+        ws = sheets_client.get_worksheet(Config.SHEET_USERS)
+        if not ws:
+            return None
+        records = ws.get_all_records()
+        for row in records:
+            if str(row.get('chat_id')) == str(chat_id):
+                return row.get('transaction_id')
+        return None
+    except Exception as e:
+        logger.error(f"خطأ في استرجاع معاملة المستخدم: {e}")
+        return None
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
     user_id = update.effective_user.id
+    is_admin = (user_id == Config.ADMIN_CHAT_ID)
+
     if data == "cmd_id":
         context.user_data['awaiting'] = 'id'
         await query.edit_message_text("📌 أرسل رقم المعاملة (ID):", parse_mode='Markdown')
     elif data == "cmd_history":
         context.user_data['awaiting'] = 'history'
         await query.edit_message_text("📌 أرسل رقم المعاملة (ID) لمعرفة سجل التتبع:", parse_mode='Markdown')
+    elif data == "my_id":
+        tid = await get_user_transaction_id(user_id)
+        if tid:
+            context.args = [tid]
+            await get_id(update, context)
+        else:
+            await query.edit_message_text("⚠️ لم يتم ربط حسابك بأي معاملة بعد. استخدم رابط البوت لربط حسابك.")
+    elif data == "my_history":
+        tid = await get_user_transaction_id(user_id)
+        if tid:
+            context.args = [tid]
+            await get_history(update, context)
+        else:
+            await query.edit_message_text("⚠️ لم يتم ربط حسابك بأي معاملة بعد.")
+    elif data == "cmd_ai_chat":
+        context.user_data['awaiting'] = 'ai_chat'
+        await query.edit_message_text("🤖 *المساعد الذكي*\nأرسل سؤالك عن المعاملات (مثال: ما هي حالة معاملتي؟)، وسأجيب بذكاء.", parse_mode='Markdown')
     elif data == "cmd_search":
         context.user_data['awaiting'] = 'search'
         await query.edit_message_text("🔎 أدخل كلمة البحث (اسم، قسم، أو رقم معاملة):", parse_mode='Markdown')
@@ -256,18 +310,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['awaiting'] = 'analyze'
         await query.edit_message_text("📊 أرسل رقم المعاملة (ID) لتحليلها:", parse_mode='Markdown')
     elif data == "cmd_qr":
-        transaction_id = None
-        if sheets_client:
-            try:
-                ws = sheets_client.get_worksheet(Config.SHEET_USERS)
-                if ws:
-                    records = ws.get_all_records()
-                    for row in records:
-                        if str(row.get('chat_id')) == str(user_id):
-                            transaction_id = row.get('transaction_id')
-                            break
-            except Exception as e:
-                logger.error(f"خطأ في جلب معاملة المستخدم: {e}")
+        transaction_id = await get_user_transaction_id(user_id)
         instruction_text = "📱 *كيفية استخدام رمز QR:*\n1️⃣ اطبع رمز QR\n2️⃣ الصقه في مكان واضح\n3️⃣ سيتم التتبع بنجاح"
         if transaction_id:
             base_url = request.host_url.rstrip('/')
@@ -289,7 +332,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_support":
         await query.edit_message_text("📨 استخدم الأمر `/support` للتواصل مع الدعم.", parse_mode='Markdown')
     elif data == "cmd_stats":
-        if user_id != Config.ADMIN_CHAT_ID:
+        if not is_admin:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
         if not sheets_client:
@@ -302,7 +345,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = f"📊 *إحصائيات*\nإجمالي: {total}\nمكتملة: {completed}\nقيد المعالجة: {pending}"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_advanced_stats":
-        if user_id != Config.ADMIN_CHAT_ID:
+        if not is_admin:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
         if not sheets_client:
@@ -318,7 +361,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"   - {status}: {count}\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_dept_stats":
-        if user_id != Config.ADMIN_CHAT_ID:
+        if not is_admin:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
         if not sheets_client:
@@ -333,7 +376,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"• {dept}: {count}\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_emp_stats":
-        if user_id != Config.ADMIN_CHAT_ID:
+        if not is_admin:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
         if not sheets_client:
@@ -348,7 +391,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"• {emp}: {data['total']} معاملة ({data['delayed']} متأخرة)\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_status_dist":
-        if user_id != Config.ADMIN_CHAT_ID:
+        if not is_admin:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
         if not sheets_client:
@@ -361,7 +404,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"• {status}: {count}\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_recent":
-        if user_id != Config.ADMIN_CHAT_ID:
+        if not is_admin:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
         if not sheets_client:
@@ -376,7 +419,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')} - {r.get('الحالة', '')}\n"
         await query.edit_message_text(msg, parse_mode='Markdown')
     elif data == "cmd_advanced_search":
-        if user_id != Config.ADMIN_CHAT_ID:
+        if not is_admin:
             await query.edit_message_text("⛔ هذا الأمر متاح فقط للمدير.")
             return
         context.user_data['awaiting'] = 'adv_search'
@@ -571,8 +614,77 @@ async def analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
         analysis = "❌ خدمة التحليل غير متاحة."
     await update.message.reply_text(analysis, parse_mode='Markdown')
 
+async def assign_employee(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /assign <transaction_id> <employee_name> """
+    if update.effective_user.id != Config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ غير مصرح.")
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("الاستخدام: /assign <ID> <اسم الموظف>")
+        return
+    tid = context.args[0]
+    emp = ' '.join(context.args[1:])
+    data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, tid)
+    if not data:
+        await update.message.reply_text(f"❌ المعاملة {tid} غير موجودة.")
+        return
+    success = sheets_client.update_transaction_field(tid, 'الموظف المسؤول', emp)
+    if success:
+        await update.message.reply_text(f"✅ تم تعيين {emp} كمسؤول عن المعاملة {tid}.")
+        sheets_client.add_history_entry(tid, f"تعيين مسؤول: {emp}", update.effective_user.first_name)
+    else:
+        await update.message.reply_text(f"❌ فشل التحديث.")
+
+async def set_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /set_status <transaction_id> <status> """
+    if update.effective_user.id != Config.ADMIN_CHAT_ID:
+        await update.message.reply_text("⛔ غير مصرح.")
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("الاستخدام: /set_status <ID> <حالة>\nالحالات: جديد, قيد المعالجة, مكتملة, متأخرة")
+        return
+    tid = context.args[0]
+    status = context.args[1]
+    valid_status = ['جديد', 'قيد المعالجة', 'مكتملة', 'متأخرة']
+    if status not in valid_status:
+        await update.message.reply_text(f"حالة غير صالحة. الخيارات: {', '.join(valid_status)}")
+        return
+    data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, tid)
+    if not data:
+        await update.message.reply_text(f"❌ المعاملة {tid} غير موجودة.")
+        return
+    success = sheets_client.update_transaction_field(tid, 'الحالة', status)
+    if success:
+        await update.message.reply_text(f"✅ تم تغيير حالة المعاملة {tid} إلى {status}.")
+        sheets_client.add_history_entry(tid, f"تغيير الحالة إلى {status}", update.effective_user.first_name)
+        await notify_user(tid, f"📢 تم تغيير حالة معاملتك إلى {status}.")
+    else:
+        await update.message.reply_text(f"❌ فشل التحديث.")
+
+async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ /feedback 1 (مفيد) أو /feedback 0 (غير مفيد) """
+    if not context.args:
+        await update.message.reply_text("الاستخدام: /feedback 1 (للمفيد) أو /feedback 0 (لغير المفيد)")
+        return
+    score = context.args[0]
+    helpful = score == "1"
+    if ai_assistant:
+        # ملاحظة: نمرر رسائل وهمية لأننا لا نحفظ آخر محادثة بسهولة – يمكن تحسينها
+        ai_assistant.record_feedback(
+            user_id=update.effective_user.id,
+            user_message="(تم التقييم عبر الأمر)",
+            ai_response="(تم التقييم)",
+            helpful=helpful
+        )
+        await update.message.reply_text("✅ شكراً لتقييمك! هذا يساعدنا على تحسين الإجابات.")
+    else:
+        await update.message.reply_text("الخدمة غير متاحة حالياً.")
+
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
+    user_id = update.effective_user.id
+    is_admin = (user_id == Config.ADMIN_CHAT_ID)
+
     if 'awaiting' in context.user_data:
         awaiting = context.user_data.pop('awaiting')
         if awaiting == 'id':
@@ -587,6 +699,18 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif awaiting == 'analyze':
             context.args = [text]
             await analyze(update, context)
+        elif awaiting == 'ai_chat':
+            # استخدام المساعد الذكي المتطور
+            if ai_assistant:
+                response = await ai_assistant.get_response(
+                    user_message=text,
+                    user_id=user_id,
+                    user_name=update.effective_user.first_name or "مستخدم",
+                    is_admin=is_admin
+                )
+                await update.message.reply_text(response)
+            else:
+                await update.message.reply_text("عذراً، المساعد الذكي غير متاح حالياً.")
         elif awaiting == 'adv_search':
             criteria = {}
             parts = text.split(',')
@@ -624,11 +748,18 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"• `{r.get('ID')}` - {r.get('اسم صاحب المعاملة الثلاثي')} - {r.get('الحالة')}\n"
             await update.message.reply_text(msg, parse_mode='Markdown')
         return
-    if ai_assistant:
-        response = await ai_assistant.get_response(text, update.effective_user.id, update.effective_user.first_name or "")
-        await update.message.reply_text(response)
     else:
-        await update.message.reply_text("عذراً، المساعد الذكي غير متاح.")
+        # أي رسالة عادية: نمرر إلى المساعد الذكي
+        if ai_assistant:
+            response = await ai_assistant.get_response(
+                user_message=text,
+                user_id=user_id,
+                user_name=update.effective_user.first_name or "مستخدم",
+                is_admin=is_admin
+            )
+            await update.message.reply_text(response)
+        else:
+            await update.message.reply_text("عذراً، المساعد الذكي غير متاح حالياً.")
 
 # ------------------ إعداد البوت وحلقة الأحداث ------------------
 bot_app = None
@@ -647,9 +778,13 @@ if Config.TELEGRAM_BOT_TOKEN:
         bot_app.add_handler(CommandHandler("qr", qr_command))
         bot_app.add_handler(CommandHandler("support", support_command))
         bot_app.add_handler(CommandHandler("analyze", analyze))
+        bot_app.add_handler(CommandHandler("assign", assign_employee))
+        bot_app.add_handler(CommandHandler("set_status", set_status))
+        bot_app.add_handler(CommandHandler("feedback", feedback_command))
         bot_app.add_handler(CallbackQueryHandler(button_callback))
         bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, smart_handler))
         logger.info("✅ تم بناء البوت")
+
         async def init_bot():
             await bot_app.initialize()
             logger.info("✅ تم تهيئة البوت في الخلفية")
@@ -918,7 +1053,7 @@ def api_transaction_history(id):
     history.sort(key=lambda x: x['time'], reverse=True)
     return jsonify(history)
 
-# ------------------ صفحة التحقق بالبريد (مع صلاحية دائمة) ------------------
+# ------------------ صفحة التحقق بالبريد ------------------
 @app.route('/verify-email', methods=['GET', 'POST'])
 def verify_email_page():
     transaction_id = request.args.get('transaction_id')
@@ -935,7 +1070,7 @@ def verify_email_page():
             return "صيغة البريد الإلكتروني غير صحيحة", 400
         if not sheets_client.is_email_allowed(email):
             return f"🚫 غير مصرح: البريد الإلكتروني {email} غير مسجل في النظام.", 403
-        # ✅ توليد توكن لا ينتهي (صلاحية دائمة)
+        # توليد توكن لا ينتهي (صلاحية دائمة)
         token = sheets_client.generate_access_token(transaction_id, email, expiry_minutes=None)
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
@@ -958,7 +1093,7 @@ def verify_email_page():
     button:hover{transform:translateY(-2px);box-shadow:0 10px 20px -5px rgba(102,126,234,0.4);}
     .info{background:#f3f4f6;border-radius:32px;padding:14px;margin-bottom:20px;font-size:13px;text-align:center;color:#4b5563;}</style>
     </head>
-    <body><div class="card"><div class="header"><h1>🔐 التحقق من البريد</h1></div><div class="content"><div class="info">💡 أدخل بريدك المسجل في النظام للوصول إلى صفحة تعديل المعاملة (صلاحية دائمة).</div>
+    <body><div class="card"><div class="header"><h1>🔐 التحقق من البريد</h1></div><div class="content"><div class="info">💡 أدخل بريدك الجامعي المسجل في النظام للوصول إلى صفحة تعديل المعاملة.</div>
     <form method="POST"><input type="email" name="email" placeholder="example@it.jan.ah" required><button type="submit">تحقق</button></form></div></div></body></html>
     '''
 
@@ -1186,7 +1321,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                    </table>
+                    </tr>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -1212,7 +1347,7 @@ INDEX_HTML = """<!DOCTYPE html>
             const tbody = document.getElementById('transactions');
             data.forEach(t => {
                 const statusClass = getStatusClass(t.status);
-                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></td><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></tr>`;
+                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></td><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></table>`;
                 tbody.innerHTML += row;
             });
         });
