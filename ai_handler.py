@@ -27,7 +27,8 @@ class AIAssistant:
         self.sheets_client = sheets_client
         
         # إعدادات الذاكرة
-        self.max_history = 5   # عدد الرسائل السابقة التي نتذكرها
+        self.max_history = 5   # عدد الرسائل السابقة التي نتذكرها من قاعدة البيانات
+        self.user_sessions = {}  # ذاكرة مؤقتة لحفظ سياق كل مستخدم: {user_id: {'last_tid': ..., 'last_data': ..., 'last_intent': ...}}
         
         # مكونات التعلم الآلي
         self.classifier = None
@@ -60,7 +61,7 @@ class AIAssistant:
             if not ws:
                 ws = self.sheets_client.spreadsheet.add_worksheet(title="user_preferences", rows=1, cols=4)
                 ws.append_row(['user_id', 'preference', 'value', 'updated_at'])
-            # الورقة الخاصة بسجل المحادثات
+            # الورقة الخاصة بسجل المحادثات الطويلة (للذاكرة الدائمة)
             ws = self.sheets_client.get_worksheet("chat_history")
             if not ws:
                 ws = self.sheets_client.spreadsheet.add_worksheet(title="chat_history", rows=1, cols=6)
@@ -118,7 +119,6 @@ class AIAssistant:
             return 'general'
         try:
             pred = self.classifier.predict([message])[0]
-            # إذا كان الناتج رقمياً (فهرس)
             if isinstance(pred, (int, np.integer)):
                 return self.intent_labels[pred] if pred < len(self.intent_labels) else 'general'
             return pred
@@ -168,9 +168,50 @@ class AIAssistant:
     def get_user_preference(self, user_id, preference, default=None):
         return self.user_preferences.get(user_id, {}).get(preference, default)
 
-    # ================== دوال الذاكرة والسياق ==================
+    # ================== دوال الذاكرة والسياق (جلسات المستخدمين) ==================
+    def _get_or_create_session(self, user_id):
+        """استرجاع جلسة المستخدم، أو إنشاؤها إذا لم توجد"""
+        if user_id not in self.user_sessions:
+            self.user_sessions[user_id] = {
+                'last_transaction_id': None,
+                'last_transaction_data': None,
+                'last_intent': None
+            }
+        return self.user_sessions[user_id]
+    
+    def _find_transaction_by_name(self, name):
+        """البحث عن معاملة باستخدام اسم صاحب المعاملة (التطابق التام أو الجزئي)"""
+        if not self.sheets_client:
+            return None
+        try:
+            records = self.sheets_client.get_latest_transactions_fast("manager")
+            name_clean = name.strip().lower()
+            # تطابق تام أولاً
+            for r in records:
+                if r.get('اسم صاحب المعاملة الثلاثي', '').strip().lower() == name_clean:
+                    return r
+            # تطابق جزئي
+            for r in records:
+                if name_clean in r.get('اسم صاحب المعاملة الثلاثي', '').strip().lower():
+                    return r
+            return None
+        except Exception as e:
+            logger.error(f"خطأ في البحث باسم المعاملة: {e}")
+            return None
+
+    def _extract_transaction_id_or_name(self, message):
+        """محاولة استخراج رقم معاملة (MUT-xxxx) أو اسم صاحب المعاملة"""
+        tid_match = re.search(r'MUT-\d{14}-\d{4}', message)
+        if tid_match:
+            return tid_match.group(0), None
+        # محاولة استخراج اسم: ابحث عن "معاملة (.*)" أو "اسمه (.*)"
+        name_match = re.search(r'معاملة\s+([^\s]+(?:\s+[^\s]+){0,4})', message)
+        if name_match:
+            return None, name_match.group(1).strip()
+        return None, None
+
     def _get_conversation_history(self, user_id, limit=5):
-        """استرجاع آخر محادثات المستخدم من Google Sheets"""
+        """استرجاع آخر محادثات المستخدم من Google Sheets (للذاكرة الدائمة)"""
         if not self.sheets_client:
             return []
         try:
@@ -191,7 +232,7 @@ class AIAssistant:
             return []
 
     def _save_conversation(self, user_id, user_name, user_message, ai_response, is_admin):
-        """تخزين المحادثة الحالية للاستفادة منها مستقبلاً"""
+        """تخزين المحادثة الحالية للاستفادة منها مستقبلاً (للذاكرة الدائمة)"""
         if not self.sheets_client:
             return
         try:
@@ -216,9 +257,7 @@ class AIAssistant:
         if self.classifier:
             ml_intent = self.predict_intent(message)
             if ml_intent in self.intent_labels:
-                # معالجة خاصة إذا كانت النية تتوافق مع أوامر المدير
                 if ml_intent == "admin_change" and is_admin:
-                    # محاولة استخراج رقم المعاملة والحالة الجديدة
                     match = re.search(r'(MUT-\d{14}-\d{4})', message)
                     if match:
                         params['transaction_id'] = match.group(0)
@@ -233,9 +272,38 @@ class AIAssistant:
                         return "specific_transaction", params
                 elif ml_intent == "stats":
                     return "stats", params
-                # يمكن إضافة المزيد من الخرائط
 
-        # إذا لم يستخدم النموذج أو لم يتعرف، ننتقل إلى التحليل التقليدي (القواعد)
+        # القواعد التقليدية
+        # أسئلة متابعة بدون ذكر معاملة (تعتمد على السياق)
+        if any(word in msg for word in ['الحالة', 'حالة', 'status']):
+            intent = "ask_status"
+            return intent, params
+        if any(word in msg for word in ['وصلت', 'أين', 'مكان', 'مرحلة', 'تحولت']):
+            intent = "ask_location"
+            return intent, params
+        if any(word in msg for word in ['المسؤول', 'موظف', 'مسؤول']):
+            intent = "ask_employee"
+            return intent, params
+        if any(word in msg for word in ['متأخرة', 'تأخير', 'تأخر']):
+            intent = "ask_delayed"
+            return intent, params
+
+        # أوامر المدير باللغة الطبيعية
+        if is_admin:
+            if 'غير حالة' in msg:
+                match = re.search(r'غير حالة\s+(\S+)\s+إلى\s+(\S+)', msg)
+                if match:
+                    params['transaction_id'] = match.group(1)
+                    params['new_status'] = match.group(2)
+                    return "admin_change_status", params
+            if 'عين مسؤول' in msg or 'اسند إلى' in msg:
+                match = re.search(r'(?:عين مسؤول|اسند إلى)\s+(\S+)\s+(.+)', msg)
+                if match:
+                    params['transaction_id'] = match.group(1)
+                    params['employee'] = match.group(2).strip()
+                    return "admin_assign_employee", params
+
+        # استخراج رقم معاملة أو اسم صاحب معاملة
         tid_match = re.search(r'MUT-\d{14}-\d{4}', message)
         if tid_match:
             params['transaction_id'] = tid_match.group(0)
@@ -256,22 +324,6 @@ class AIAssistant:
                 params['status'] = 'متأخرة'
             return intent, params
 
-        if is_admin:
-            # أوامر مدير باللغة الطبيعية
-            if 'غير حالة' in msg:
-                match = re.search(r'غير حالة\s+(\S+)\s+إلى\s+(\S+)', msg)
-                if match:
-                    params['transaction_id'] = match.group(1)
-                    params['new_status'] = match.group(2)
-                    return "admin_change_status", params
-            if 'عين مسؤول' in msg or 'اسند إلى' in msg:
-                match = re.search(r'(?:عين مسؤول|اسند إلى)\s+(\S+)\s+(.+)', msg)
-                if match:
-                    params['transaction_id'] = match.group(1)
-                    params['employee'] = match.group(2).strip()
-                    return "admin_assign_employee", params
-
-        # بحث بقسم أو موظف
         dept_match = re.search(r'قسم\s+([^\s]+(?:\s+[^\s]+)?)', msg)
         if dept_match:
             params['department'] = dept_match.group(1).strip()
@@ -282,7 +334,6 @@ class AIAssistant:
             params['employee'] = emp_match.group(1).strip()
             return "employee_transactions", params
 
-        # حالات محددة
         if 'مكتملة' in msg and ('معاملة' in msg or 'المعاملات' in msg):
             params['status'] = 'مكتملة'
             return "status_transactions", params
@@ -304,124 +355,179 @@ class AIAssistant:
 
         return intent, params
 
-    # ================== جلب البيانات من Sheets ==================
+    # ================== جلب البيانات من Sheets مع دعم السياق ==================
     async def _fetch_data_by_intent(self, intent, params, user_id, is_admin=False):
         if not self.sheets_client:
             return "نظام قاعدة البيانات غير متصل حالياً."
 
-        try:
-            if intent == "specific_transaction":
-                tid = params.get('transaction_id')
-                data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
-                return self._format_transaction_context(data) if data else f"لم أجد معاملة بالرقم {tid}."
+        # الحصول على جلسة المستخدم
+        session = self._get_or_create_session(user_id)
+        transaction_id = params.get('transaction_id')
+        transaction_name = params.get('transaction_name')
+        
+        # إذا لم نجد رقم معاملة ولا اسماً في الطلب الحالي، نستخدم آخر معاملة من الجلسة
+        if not transaction_id and not transaction_name:
+            if session.get('last_transaction_id'):
+                transaction_id = session['last_transaction_id']
+                logger.info(f"استخدام المعاملة المخزنة: {transaction_id}")
+            else:
+                # إذا لم توجد معاملة مخزنة، رد بأن المستخدم لم يحدد معاملة
+                return "لم أحدد أي معاملة. يرجى ذكر رقم المعاملة أو الاسم الكامل لصاحب المعاملة."
 
-            if intent == "my_transaction":
-                tid = self._get_user_transaction_id(user_id)
-                if tid:
-                    data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
-                    return self._format_transaction_context(data) if data else "لم أجد معاملة مرتبطة بحسابك."
-                return "لم يتم ربط حسابك بأي معاملة بعد. استخدم رابط البوت لربط حسابك."
+        # إذا كان لدينا اسم (بدون رقم)، نبحث عن المعاملة و نخزنها في الجلسة
+        if transaction_name and not transaction_id:
+            data = self._find_transaction_by_name(transaction_name)
+            if not data:
+                return f"لم أجد معاملة باسم '{transaction_name}'. تأكد من الاسم أو استخدم رقم المعاملة."
+            transaction_id = data.get('ID')
+            session['last_transaction_data'] = data
+            session['last_transaction_id'] = transaction_id
+            session['last_intent'] = intent
+        elif transaction_id:
+            # إذا كان لدينا رقم، نجلب البيانات ونخزنها في الجلسة
+            data = self.sheets_client.get_latest_row_by_id_fast("manager", transaction_id)
+            if data:
+                session['last_transaction_data'] = data
+                session['last_transaction_id'] = transaction_id
+                session['last_intent'] = intent
+            else:
+                return f"لم أجد معاملة بالرقم {transaction_id}."
 
-            if intent == "admin_change_status" and is_admin:
-                tid = params.get('transaction_id')
-                new_status = params.get('new_status')
-                if not tid or not new_status:
-                    return "لم أفهم رقم المعاملة أو الحالة الجديدة."
-                valid_status = ['جديد', 'قيد المعالجة', 'مكتملة', 'متأخرة']
-                if new_status not in valid_status:
-                    return f"الحالة `{new_status}` غير صالحة. الحالات المسموحة: {', '.join(valid_status)}"
-                # تحديث الحالة
-                success = self.sheets_client.update_transaction_field(tid, 'الحالة', new_status)
-                if success:
-                    self.sheets_client.add_history_entry(tid, f"تغيير الحالة إلى {new_status} (عن طريق AI)", "AI")
-                    return f"✅ تم تغيير حالة المعاملة {tid} إلى **{new_status}**."
-                else:
-                    return f"❌ فشل تغيير حالة المعاملة {tid}. تأكد من الرقم."
+        # الآن أصبح لدينا transaction_id و data (من الجلسة أو من البحث الجديد)
+        data = session.get('last_transaction_data')
+        if not data:
+            return "حدث خطأ في استرجاع بيانات المعاملة."
 
-            if intent == "admin_assign_employee" and is_admin:
-                tid = params.get('transaction_id')
-                emp = params.get('employee')
-                if not tid or not emp:
-                    return "لم أفهم رقم المعاملة أو اسم الموظف."
-                success = self.sheets_client.update_transaction_field(tid, 'الموظف المسؤول', emp)
-                if success:
-                    self.sheets_client.add_history_entry(tid, f"تعيين {emp} كمسؤول (عن طريق AI)", "AI")
-                    return f"✅ تم تعيين **{emp}** كمسؤول عن المعاملة {tid}."
-                else:
-                    return f"❌ فشل التعيين. تأكد من رقم المعاملة."
+        # معالجة النيات المختلفة باستخدام data
+        if intent == "specific_transaction" or intent == "my_transaction":
+            return self._format_transaction_context(data)
 
-            if intent == "stats":
-                records = self.sheets_client.get_latest_transactions_fast("manager")
-                total = len(records)
-                status_filter = params.get('status')
-                if status_filter:
-                    filtered = [r for r in records if r.get('الحالة') == status_filter]
-                    return f"عدد المعاملات ذات الحالة '{status_filter}' هو {len(filtered)} من إجمالي {total} معاملة."
-                completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
-                pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
-                delayed = sum(1 for r in records if r.get('التأخير') == 'نعم')
-                return (f"📊 إحصائيات المعاملات:\n- إجمالي: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}")
+        if intent == "ask_status":
+            status = data.get('الحالة', 'غير معروف')
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            return f"حالة معاملة {name} (رقم {transaction_id}) هي **{status}**."
 
-            if intent == "department_transactions":
-                dept = params.get('department')
-                records = self.sheets_client.filter_transactions("manager", department=dept)
-                if not records:
-                    return f"لا توجد معاملات في قسم '{dept}'."
-                sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in records[:5]])
-                more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
-                return f"📁 المعاملات في قسم {dept}: ({len(records)} معاملة)\n{sample}{more}"
+        if intent == "ask_location":
+            # يمكنك تخصيص أسماء الأعمدة حسب هيكل بياناتك
+            location = data.get('المؤسسة الحالية') or data.get('مرحلة') or data.get('آخر إجراء') or 'غير معروف'
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            return f"معاملة {name} وصلت إلى: **{location}**."
 
-            if intent == "employee_transactions":
-                emp = params.get('employee')
-                records = self.sheets_client.filter_transactions("manager", employee=emp)
-                if not records:
-                    return f"لا توجد معاملات للموظف '{emp}'."
-                sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in records[:5]])
-                more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
-                return f"👤 معاملات الموظف {emp}: ({len(records)} معاملة)\n{sample}{more}"
+        if intent == "ask_employee":
+            employee = data.get('الموظف المسؤول', 'غير معروف')
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            return f"المسؤول عن معاملة {name} هو **{employee}**."
 
-            if intent == "status_transactions":
-                status = params.get('status')
-                records = self.sheets_client.filter_transactions("manager", status=status)
-                if not records:
-                    return f"لا توجد معاملات بحالة '{status}'."
-                sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} (قسم: {r.get('القسم')})" for r in records[:5]])
-                more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
-                return f"📋 المعاملات بحالة {status}: ({len(records)} معاملة)\n{sample}{more}"
+        if intent == "ask_delayed":
+            delay = data.get('التأخير', 'لا')
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            if delay == 'نعم':
+                return f"⚠️ معاملة {name} **متأخرة** حالياً."
+            else:
+                return f"✅ معاملة {name} **غير متأخرة**."
 
-            if intent == "search_transactions":
-                keyword = params.get('keyword', '').lower()
-                records = self.sheets_client.get_latest_transactions_fast("manager")
-                found = []
-                for r in records:
-                    if (keyword in str(r.get('ID', '')).lower() or
-                        keyword in str(r.get('اسم صاحب المعاملة الثلاثي', '')).lower() or
-                        keyword in str(r.get('القسم', '')).lower()):
-                        found.append(r)
-                if not found:
-                    return f"لم أعثر على معاملات تحتوي على '{keyword}'."
-                sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in found[:5]])
-                more = f"\n... و{len(found)-5} معاملات أخرى" if len(found) > 5 else ""
-                return f"🔎 نتائج البحث عن '{keyword}': ({len(found)} معاملة)\n{sample}{more}"
+        if intent == "admin_change_status" and is_admin:
+            tid = transaction_id
+            new_status = params.get('new_status')
+            if not new_status:
+                return "لم أفهم الحالة الجديدة."
+            valid = ['جديد', 'قيد المعالجة', 'مكتملة', 'متأخرة']
+            if new_status not in valid:
+                return f"الحالة `{new_status}` غير صالحة. الحالات المسموحة: {', '.join(valid)}"
+            success = self.sheets_client.update_transaction_field(tid, 'الحالة', new_status)
+            if success:
+                self.sheets_client.add_history_entry(tid, f"تغيير الحالة إلى {new_status} (عن طريق AI)", "AI")
+                # تحديث الجلسة بالبيانات الجديدة
+                updated_data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
+                if updated_data:
+                    session['last_transaction_data'] = updated_data
+                return f"✅ تم تغيير حالة المعاملة {tid} إلى **{new_status}**."
+            else:
+                return f"❌ فشل تغيير حالة المعاملة {tid}. تأكد من الرقم."
 
-            # استعلام عام: عرض نظرة عامة (للمستخدمين العاديين)
+        if intent == "admin_assign_employee" and is_admin:
+            tid = transaction_id
+            emp = params.get('employee')
+            if not emp:
+                return "لم أفهم اسم الموظف."
+            success = self.sheets_client.update_transaction_field(tid, 'الموظف المسؤول', emp)
+            if success:
+                self.sheets_client.add_history_entry(tid, f"تعيين {emp} كمسؤول (عن طريق AI)", "AI")
+                # تحديث الجلسة
+                updated_data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
+                if updated_data:
+                    session['last_transaction_data'] = updated_data
+                return f"✅ تم تعيين **{emp}** كمسؤول عن المعاملة {tid}."
+            else:
+                return f"❌ فشل التعيين. تأكد من رقم المعاملة."
+
+        # باقي النيات (stats, department, employee, search, إلخ) كما هي – لا تحتاج إلى سياق المعاملة
+        if intent == "stats":
             records = self.sheets_client.get_latest_transactions_fast("manager")
             total = len(records)
+            status_filter = params.get('status')
+            if status_filter:
+                filtered = [r for r in records if r.get('الحالة') == status_filter]
+                return f"عدد المعاملات ذات الحالة '{status_filter}' هو {len(filtered)} من إجمالي {total} معاملة."
             completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
             pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
             delayed = sum(1 for r in records if r.get('التأخير') == 'نعم')
-            if is_admin:
-                # للمدير: إحصائيات أكثر تفصيلاً
-                recent = sorted(records, key=lambda x: x.get('آخر تعديل بتاريخ', ''), reverse=True)[:5]
-                recent_text = "\n".join([f"- {r.get('ID')} - {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in recent])
-                return (f"📊 نظرة عامة على النظام (للمدير):\n- إجمالي: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}\n\nأحدث المعاملات:\n{recent_text}")
-            else:
-                # للمستخدم العادي: إحصائيات مختصرة
-                return (f"📊 إحصائيات عامة:\n- إجمالي المعاملات: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}\n\nيمكنك استخدام الأزرار لتفاصيل معاملتك الخاصة.")
+            return (f"📊 إحصائيات المعاملات:\n- إجمالي: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}")
 
-        except Exception as e:
-            logger.error(f"خطأ في جلب البيانات: {e}")
-            return "حدث خطأ أثناء جلب البيانات من النظام."
+        if intent == "department_transactions":
+            dept = params.get('department')
+            records = self.sheets_client.filter_transactions("manager", department=dept)
+            if not records:
+                return f"لا توجد معاملات في قسم '{dept}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in records[:5]])
+            more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
+            return f"📁 المعاملات في قسم {dept}: ({len(records)} معاملة)\n{sample}{more}"
+
+        if intent == "employee_transactions":
+            emp = params.get('employee')
+            records = self.sheets_client.filter_transactions("manager", employee=emp)
+            if not records:
+                return f"لا توجد معاملات للموظف '{emp}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in records[:5]])
+            more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
+            return f"👤 معاملات الموظف {emp}: ({len(records)} معاملة)\n{sample}{more}"
+
+        if intent == "status_transactions":
+            status = params.get('status')
+            records = self.sheets_client.filter_transactions("manager", status=status)
+            if not records:
+                return f"لا توجد معاملات بحالة '{status}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} (قسم: {r.get('القسم')})" for r in records[:5]])
+            more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
+            return f"📋 المعاملات بحالة {status}: ({len(records)} معاملة)\n{sample}{more}"
+
+        if intent == "search_transactions":
+            keyword = params.get('keyword', '').lower()
+            records = self.sheets_client.get_latest_transactions_fast("manager")
+            found = []
+            for r in records:
+                if (keyword in str(r.get('ID', '')).lower() or
+                    keyword in str(r.get('اسم صاحب المعاملة الثلاثي', '')).lower() or
+                    keyword in str(r.get('القسم', '')).lower()):
+                    found.append(r)
+            if not found:
+                return f"لم أعثر على معاملات تحتوي على '{keyword}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in found[:5]])
+            more = f"\n... و{len(found)-5} معاملات أخرى" if len(found) > 5 else ""
+            return f"🔎 نتائج البحث عن '{keyword}': ({len(found)} معاملة)\n{sample}{more}"
+
+        # استعلام عام (نظرة عامة)
+        records = self.sheets_client.get_latest_transactions_fast("manager")
+        total = len(records)
+        completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
+        pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
+        delayed = sum(1 for r in records if r.get('التأخير') == 'نعم')
+        if is_admin:
+            recent = sorted(records, key=lambda x: x.get('آخر تعديل بتاريخ', ''), reverse=True)[:5]
+            recent_text = "\n".join([f"- {r.get('ID')} - {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in recent])
+            return (f"📊 نظرة عامة على النظام (للمدير):\n- إجمالي: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}\n\nأحدث المعاملات:\n{recent_text}")
+        else:
+            return (f"📊 إحصائيات عامة:\n- إجمالي المعاملات: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}")
 
     # ================== توليد الرد باستخدام Groq ==================
     async def _generate_response(self, user_message, data_context, user_name, is_admin=False, history_context=None):
@@ -447,6 +553,7 @@ class AIAssistant:
             "أنت مساعد ذكي ومحترف لإدارة المعاملات الإدارية. لديك إمكانية الوصول إلى بيانات حقيقية عن المعاملات. "
             "أجب بالعربية الفصحى أو العامية المفهومة، بأسلوب مهذب ودقيق. "
             "لا تختلق معلومات غير موجودة في البيانات. إذا لم تعرف الإجابة، قل ذلك بوضوح. "
+            "تذكر أن لديك ذاكرة مؤقتة للمستخدم: تذكر آخر معاملة تحدث عنها المستخدم ويمكنك الرد على أسئلة المتابعة دون الحاجة إلى إعادة ذكر رقم المعاملة أو الاسم."
         )
         if is_admin:
             base += (
@@ -477,20 +584,28 @@ class AIAssistant:
     async def get_response(self, user_message, user_id, user_name, is_admin=False):
         """الدالة الرئيسية التي يستدعيها البوت"""
         try:
-            # 1. فهم النية
-            intent, params = self._understand_intent(user_message, is_admin)
-            logger.debug(f"Intent: {intent}, Params: {params}")
+            # محاولة استخراج رقم أو اسم من الرسالة الحالية
+            tid, name = self._extract_transaction_id_or_name(user_message)
+            params = {}
+            if tid:
+                params['transaction_id'] = tid
+            if name:
+                params['transaction_name'] = name
             
-            # 2. جلب البيانات بناءً على النية
+            # فهم النية (قد تعتمد على الكلمات المفتاحية)
+            intent, extra_params = self._understand_intent(user_message, is_admin)
+            params.update(extra_params)
+            
+            # جلب البيانات بناءً على النية والمعاملات المستخرجة
             data_context = await self._fetch_data_by_intent(intent, params, user_id, is_admin)
             
-            # 3. استرجاع سجل المحادثات السابقة
+            # استرجاع سجل المحادثات السابقة (للذاكرة الطويلة)
             history_context = self._get_conversation_history(user_id, limit=self.max_history)
             
-            # 4. توليد الرد باستخدام Groq (مع السياق)
+            # توليد الرد باستخدام Groq (مع السياق)
             response = await self._generate_response(user_message, data_context, user_name, is_admin, history_context)
             
-            # 5. حفظ المحادثة الحالية لاستخدامها مستقبلاً (للتعلم)
+            # حفظ المحادثة الحالية لاستخدامها مستقبلاً (للذاكرة الطويلة)
             self._save_conversation(user_id, user_name, user_message, response, is_admin)
             
             return response
@@ -498,7 +613,7 @@ class AIAssistant:
             logger.error(f"خطأ عام في get_response: {e}", exc_info=True)
             return "عذراً، حدث خطأ غير متوقع. يُرجى المحاولة مرة أخرى لاحقاً."
 
-    # ================== دوال مساعدة ==================
+    # ================== دوال مساعدة عامة ==================
     def _get_user_transaction_id(self, chat_id):
         if not self.sheets_client:
             return None
