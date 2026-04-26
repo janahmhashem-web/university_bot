@@ -1,8 +1,7 @@
+# ai_handler.py - مساعد ذكي متكامل مع Groq، تعلم آلي، ذاكرة سياقية، وتحليل عميق
 import os
 import re
 import logging
-import pickle
-import numpy as np
 from datetime import datetime
 from collections import defaultdict
 from groq import Groq
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class AIAssistant:
     """مساعد ذكي متكامل مع قدرات تعلم آلي وذاكرة سياقية"""
-    
+
     def __init__(self, sheets_client=None):
         # Groq API
         api_key = os.getenv("GROQ_API_KEY")
@@ -22,22 +21,22 @@ class AIAssistant:
             raise ValueError("GROQ_API_KEY not set")
         self.client = Groq(api_key=api_key)
         self.model = "llama-3.1-8b-instant"
-        
+
         # Google Sheets client (لتخزين التعلم والذاكرة)
         self.sheets_client = sheets_client
-        
+
         # إعدادات الذاكرة
         self.max_history = 5   # عدد الرسائل السابقة التي نتذكرها من قاعدة البيانات
-        self.user_sessions = {}  # ذاكرة مؤقتة لحفظ سياق كل مستخدم: {user_id: {'last_tid': ..., 'last_data': ..., 'last_intent': ...}}
-        
+        self.user_sessions = {}  # ذاكرة مؤقتة لحفظ سياق كل مستخدم
+
         # مكونات التعلم الآلي
         self.classifier = None
-        self.user_preferences = defaultdict(dict)  # {user_id: {'style': 'concise', ...}}
+        self.user_preferences = defaultdict(dict)
         self.intent_labels = ['stats', 'specific_transaction', 'general', 'admin_change', 'unknown']
-        
+
         # تهيئة النموذج من البيانات المخزنة
         self._init_ml_model()
-        
+
         # التأكد من وجود الأوراق اللازمة
         self._init_sheets()
 
@@ -46,22 +45,18 @@ class AIAssistant:
         if not self.sheets_client:
             return
         try:
-            # الورقة الخاصة ببيانات التدريب على التصنيف
             ws = self.sheets_client.get_worksheet("ml_training_data")
             if not ws:
                 ws = self.sheets_client.spreadsheet.add_worksheet(title="ml_training_data", rows=1, cols=3)
                 ws.append_row(['text', 'label', 'timestamp'])
-            # الورقة الخاصة بتقييمات المستخدمين
             ws = self.sheets_client.get_worksheet("ml_feedback")
             if not ws:
                 ws = self.sheets_client.spreadsheet.add_worksheet(title="ml_feedback", rows=1, cols=6)
                 ws.append_row(['timestamp', 'user_id', 'user_message', 'ai_response', 'helpful', 'processed'])
-            # الورقة الخاصة بتفضيلات المستخدمين
             ws = self.sheets_client.get_worksheet("user_preferences")
             if not ws:
                 ws = self.sheets_client.spreadsheet.add_worksheet(title="user_preferences", rows=1, cols=4)
                 ws.append_row(['user_id', 'preference', 'value', 'updated_at'])
-            # الورقة الخاصة بسجل المحادثات الطويلة (للذاكرة الدائمة)
             ws = self.sheets_client.get_worksheet("chat_history")
             if not ws:
                 ws = self.sheets_client.spreadsheet.add_worksheet(title="chat_history", rows=1, cols=6)
@@ -78,7 +73,6 @@ class AIAssistant:
                     self._train_model(training_data)
                     logger.info(f"✅ تم تدريب النموذج على {len(training_data)} عينة")
                 else:
-                    # نموذج فارغ (سيُدرب لاحقاً)
                     self.classifier = Pipeline([
                         ('tfidf', TfidfVectorizer(max_features=1000)),
                         ('clf', MultinomialNB())
@@ -91,7 +85,6 @@ class AIAssistant:
             self.classifier = None
 
     def _load_training_data(self):
-        """تحميل البيانات المصنفة من Google Sheets"""
         try:
             ws = self.sheets_client.get_worksheet("ml_training_data")
             if not ws:
@@ -105,16 +98,13 @@ class AIAssistant:
             return []
 
     def _train_model(self, training_data):
-        """تدريب نموذج تصنيف النية"""
         if not training_data:
             return
         texts, labels = zip(*training_data)
         self.classifier.fit(texts, labels)
         logger.info(f"✅ النموذج مدرب على {len(texts)} عينة")
 
-    # ================== دوال التعلم الآلي ==================
     def predict_intent(self, message):
-        """توقع نية الرسالة باستخدام النموذج المدرب"""
         if self.classifier is None:
             return 'general'
         try:
@@ -127,7 +117,6 @@ class AIAssistant:
             return 'general'
 
     def record_feedback(self, user_id, user_message, ai_response, helpful=True):
-        """تسجيل تقييم المستخدم للرد (مفيد/غير مفيد) لتحسين النموذج"""
         if not self.sheets_client:
             return
         try:
@@ -141,19 +130,16 @@ class AIAssistant:
             logger.error(f"فشل تسجيل التقييم: {e}")
 
     def update_user_preference(self, user_id, preference, value):
-        """تحديث تفضيلات المستخدم (مثل نمط الرد، اللغة، إلخ)"""
         self.user_preferences[user_id][preference] = value
         self._save_user_preferences()
 
     def _save_user_preferences(self):
-        """حفظ التفضيلات في Google Sheets"""
         if not self.sheets_client:
             return
         try:
             ws = self.sheets_client.get_worksheet("user_preferences")
             if not ws:
                 return
-            # تنظيف المحتوى القديم (اختياري: تحديث الصفوف بدلاً من مسح الكل)
             all_records = ws.get_all_values()
             if len(all_records) > 1:
                 for i in range(len(all_records)-1, 0, -1):
@@ -168,9 +154,8 @@ class AIAssistant:
     def get_user_preference(self, user_id, preference, default=None):
         return self.user_preferences.get(user_id, {}).get(preference, default)
 
-    # ================== دوال الذاكرة والسياق (جلسات المستخدمين) ==================
+    # ================== دوال الذاكرة والسياق ==================
     def _get_or_create_session(self, user_id):
-        """استرجاع جلسة المستخدم، أو إنشاؤها إذا لم توجد"""
         if user_id not in self.user_sessions:
             self.user_sessions[user_id] = {
                 'last_transaction_id': None,
@@ -178,19 +163,16 @@ class AIAssistant:
                 'last_intent': None
             }
         return self.user_sessions[user_id]
-    
+
     def _find_transaction_by_name(self, name):
-        """البحث عن معاملة باستخدام اسم صاحب المعاملة (التطابق التام أو الجزئي)"""
         if not self.sheets_client:
             return None
         try:
             records = self.sheets_client.get_latest_transactions_fast("manager")
             name_clean = name.strip().lower()
-            # تطابق تام أولاً
             for r in records:
                 if r.get('اسم صاحب المعاملة الثلاثي', '').strip().lower() == name_clean:
                     return r
-            # تطابق جزئي
             for r in records:
                 if name_clean in r.get('اسم صاحب المعاملة الثلاثي', '').strip().lower():
                     return r
@@ -200,18 +182,15 @@ class AIAssistant:
             return None
 
     def _extract_transaction_id_or_name(self, message):
-        """محاولة استخراج رقم معاملة (MUT-xxxx) أو اسم صاحب المعاملة"""
         tid_match = re.search(r'MUT-\d{14}-\d{4}', message)
         if tid_match:
             return tid_match.group(0), None
-        # محاولة استخراج اسم: ابحث عن "معاملة (.*)" أو "اسمه (.*)"
         name_match = re.search(r'معاملة\s+([^\s]+(?:\s+[^\s]+){0,4})', message)
         if name_match:
             return None, name_match.group(1).strip()
         return None, None
 
     def _get_conversation_history(self, user_id, limit=5):
-        """استرجاع آخر محادثات المستخدم من Google Sheets (للذاكرة الدائمة)"""
         if not self.sheets_client:
             return []
         try:
@@ -221,7 +200,7 @@ class AIAssistant:
             records = ws.get_all_records()
             user_records = [r for r in records if str(r.get('user_id')) == str(user_id)]
             user_records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-            last_records = user_records[:limit][::-1]  # الأقدم أولاً
+            last_records = user_records[:limit][::-1]
             history = []
             for rec in last_records:
                 history.append({"role": "user", "content": rec.get('user_message', '')})
@@ -232,7 +211,6 @@ class AIAssistant:
             return []
 
     def _save_conversation(self, user_id, user_name, user_message, ai_response, is_admin):
-        """تخزين المحادثة الحالية للاستفادة منها مستقبلاً (للذاكرة الدائمة)"""
         if not self.sheets_client:
             return
         try:
@@ -244,16 +222,13 @@ class AIAssistant:
         except Exception as e:
             logger.error(f"فشل حفظ المحادثة: {e}")
 
-    # ================== دوال فهم النية الأساسية ==================
+    # ================== فهم النية الأساسية ==================
     def _understand_intent(self, message, is_admin=False):
-        """
-        فهم نية المستخدم – يستخدم النموذج المدرب إن وُجد، وإلا يعتمد على القواعد.
-        """
         msg = message.lower()
         params = {}
         intent = "general"
 
-        # أولاً: محاولة استخدام النموذج المدرب (إن وُجد)
+        # استخدام النموذج المدرب إن وُجد
         if self.classifier:
             ml_intent = self.predict_intent(message)
             if ml_intent in self.intent_labels:
@@ -274,21 +249,15 @@ class AIAssistant:
                     return "stats", params
 
         # القواعد التقليدية
-        # أسئلة متابعة بدون ذكر معاملة (تعتمد على السياق)
         if any(word in msg for word in ['الحالة', 'حالة', 'status']):
-            intent = "ask_status"
-            return intent, params
+            return "ask_status", params
         if any(word in msg for word in ['وصلت', 'أين', 'مكان', 'مرحلة', 'تحولت']):
-            intent = "ask_location"
-            return intent, params
+            return "ask_location", params
         if any(word in msg for word in ['المسؤول', 'موظف', 'مسؤول']):
-            intent = "ask_employee"
-            return intent, params
+            return "ask_employee", params
         if any(word in msg for word in ['متأخرة', 'تأخير', 'تأخر']):
-            intent = "ask_delayed"
-            return intent, params
+            return "ask_delayed", params
 
-        # أوامر المدير باللغة الطبيعية
         if is_admin:
             if 'غير حالة' in msg:
                 match = re.search(r'غير حالة\s+(\S+)\s+إلى\s+(\S+)', msg)
@@ -303,7 +272,6 @@ class AIAssistant:
                     params['employee'] = match.group(2).strip()
                     return "admin_assign_employee", params
 
-        # استخراج رقم معاملة أو اسم صاحب معاملة
         tid_match = re.search(r'MUT-\d{14}-\d{4}', message)
         if tid_match:
             params['transaction_id'] = tid_match.group(0)
@@ -360,21 +328,16 @@ class AIAssistant:
         if not self.sheets_client:
             return "نظام قاعدة البيانات غير متصل حالياً."
 
-        # الحصول على جلسة المستخدم
         session = self._get_or_create_session(user_id)
         transaction_id = params.get('transaction_id')
         transaction_name = params.get('transaction_name')
-        
-        # إذا لم نجد رقم معاملة ولا اسماً في الطلب الحالي، نستخدم آخر معاملة من الجلسة
+
         if not transaction_id and not transaction_name:
             if session.get('last_transaction_id'):
                 transaction_id = session['last_transaction_id']
-                logger.info(f"استخدام المعاملة المخزنة: {transaction_id}")
             else:
-                # إذا لم توجد معاملة مخزنة، رد بأن المستخدم لم يحدد معاملة
                 return "لم أحدد أي معاملة. يرجى ذكر رقم المعاملة أو الاسم الكامل لصاحب المعاملة."
 
-        # إذا كان لدينا اسم (بدون رقم)، نبحث عن المعاملة و نخزنها في الجلسة
         if transaction_name and not transaction_id:
             data = self._find_transaction_by_name(transaction_name)
             if not data:
@@ -382,24 +345,20 @@ class AIAssistant:
             transaction_id = data.get('ID')
             session['last_transaction_data'] = data
             session['last_transaction_id'] = transaction_id
-            session['last_intent'] = intent
         elif transaction_id:
-            # إذا كان لدينا رقم، نجلب البيانات ونخزنها في الجلسة
             data = self.sheets_client.get_latest_row_by_id_fast("manager", transaction_id)
             if data:
                 session['last_transaction_data'] = data
                 session['last_transaction_id'] = transaction_id
-                session['last_intent'] = intent
             else:
                 return f"لم أجد معاملة بالرقم {transaction_id}."
 
-        # الآن أصبح لدينا transaction_id و data (من الجلسة أو من البحث الجديد)
         data = session.get('last_transaction_data')
         if not data:
             return "حدث خطأ في استرجاع بيانات المعاملة."
 
-        # معالجة النيات المختلفة باستخدام data
-        if intent == "specific_transaction" or intent == "my_transaction":
+        # معالجة النيات المختلفة
+        if intent in ["specific_transaction", "my_transaction"]:
             return self._format_transaction_context(data)
 
         if intent == "ask_status":
@@ -408,7 +367,6 @@ class AIAssistant:
             return f"حالة معاملة {name} (رقم {transaction_id}) هي **{status}**."
 
         if intent == "ask_location":
-            # يمكنك تخصيص أسماء الأعمدة حسب هيكل بياناتك
             location = data.get('المؤسسة الحالية') or data.get('مرحلة') or data.get('آخر إجراء') or 'غير معروف'
             name = data.get('اسم صاحب المعاملة الثلاثي', '')
             return f"معاملة {name} وصلت إلى: **{location}**."
@@ -437,7 +395,6 @@ class AIAssistant:
             success = self.sheets_client.update_transaction_field(tid, 'الحالة', new_status)
             if success:
                 self.sheets_client.add_history_entry(tid, f"تغيير الحالة إلى {new_status} (عن طريق AI)", "AI")
-                # تحديث الجلسة بالبيانات الجديدة
                 updated_data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
                 if updated_data:
                     session['last_transaction_data'] = updated_data
@@ -453,7 +410,6 @@ class AIAssistant:
             success = self.sheets_client.update_transaction_field(tid, 'الموظف المسؤول', emp)
             if success:
                 self.sheets_client.add_history_entry(tid, f"تعيين {emp} كمسؤول (عن طريق AI)", "AI")
-                # تحديث الجلسة
                 updated_data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
                 if updated_data:
                     session['last_transaction_data'] = updated_data
@@ -461,7 +417,7 @@ class AIAssistant:
             else:
                 return f"❌ فشل التعيين. تأكد من رقم المعاملة."
 
-        # باقي النيات (stats, department, employee, search, إلخ) كما هي – لا تحتاج إلى سياق المعاملة
+        # إحصائيات وبحث
         if intent == "stats":
             records = self.sheets_client.get_latest_transactions_fast("manager")
             total = len(records)
@@ -582,32 +538,25 @@ class AIAssistant:
 
     # ================== الدالة الرئيسية للرد ==================
     async def get_response(self, user_message, user_id, user_name, is_admin=False):
-        """الدالة الرئيسية التي يستدعيها البوت"""
         try:
-            # محاولة استخراج رقم أو اسم من الرسالة الحالية
             tid, name = self._extract_transaction_id_or_name(user_message)
             params = {}
             if tid:
                 params['transaction_id'] = tid
             if name:
                 params['transaction_name'] = name
-            
-            # فهم النية (قد تعتمد على الكلمات المفتاحية)
+
             intent, extra_params = self._understand_intent(user_message, is_admin)
             params.update(extra_params)
-            
-            # جلب البيانات بناءً على النية والمعاملات المستخرجة
+
             data_context = await self._fetch_data_by_intent(intent, params, user_id, is_admin)
-            
-            # استرجاع سجل المحادثات السابقة (للذاكرة الطويلة)
+
             history_context = self._get_conversation_history(user_id, limit=self.max_history)
-            
-            # توليد الرد باستخدام Groq (مع السياق)
+
             response = await self._generate_response(user_message, data_context, user_name, is_admin, history_context)
-            
-            # حفظ المحادثة الحالية لاستخدامها مستقبلاً (للذاكرة الطويلة)
+
             self._save_conversation(user_id, user_name, user_message, response, is_admin)
-            
+
             return response
         except Exception as e:
             logger.error(f"خطأ عام في get_response: {e}", exc_info=True)
@@ -647,7 +596,6 @@ class AIAssistant:
         return "\n".join(lines)
 
     async def analyze_transaction(self, transaction_data, history):
-        """تحليل معمق لمعاملة معينة (دالة منفصلة)"""
         try:
             summary = f"رقم المعاملة: {transaction_data.get('ID', 'غير معروف')}\n"
             summary += f"الاسم: {transaction_data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}\n"
