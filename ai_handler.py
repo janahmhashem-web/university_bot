@@ -1,374 +1,688 @@
-# ai_handler.py - نظام ذكاء اصطناعي ذاتي التعلم مع تفكير عميق وتحليل استنتاجي
 import os
 import re
-import json
 import logging
-import random
+import pickle
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple, Union, Any
-
 from groq import Groq
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.pipeline import Pipeline
-from sklearn.metrics.pairwise import cosine_similarity
-import joblib
-
-# اختياري: استخدام nltk لتحليل المشاعر
-try:
-    from nltk.sentiment import SentimentIntensityAnalyzer
-    nltk.download('vader_lexicon', quiet=True)
-    SENTIMENT_AVAILABLE = True
-except ImportError:
-    SENTIMENT_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
-class SelfLearningAIAssistant:
-    """
-    مساعد ذكي يتعلم باستمرار من التفاعلات البشرية:
-    - نموذج ML لتصنيف النية يتم إعادة تدريبه كل ليلة أو عند تجمع عينات كافية.
-    - توليد عينات تدريب من التفاعلات الحقيقية (باستخدام تقييم ضمني وصريح).
-    - تحليل عميق باستخدام Chain-of-Thought.
-    - ذاكرة معرفية شخصية لكل مستخدم.
-    """
-
-    INTENT_CATEGORIES = [
-        "general_question", "transaction_status", "transaction_history",
-        "transaction_details", "assign_employee", "change_status",
-        "stats", "search", "my_transaction", "analyze",
-        "help", "greeting", "farewell", "support"
-    ]
+class AIAssistant:
+    """مساعد ذكي متكامل مع قدرات تعلم آلي وذاكرة سياقية"""
     
-    def __init__(self, sheets_client=None, model_path="ai_model.joblib"):
-        self.sheets_client = sheets_client
-        self.model_path = model_path
-        
-        # Groq للإجابات التوليدية والتحليل العميق
+    def __init__(self, sheets_client=None):
+        # Groq API
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
-            raise ValueError("GROQ_API_KEY missing")
+            raise ValueError("GROQ_API_KEY not set")
         self.client = Groq(api_key=api_key)
-        self.model_name = "llama3-70b-8192"  # قوي للتحليل والتفكير
+        self.model = "llama-3.1-8b-instant"
         
-        # إعدادات الإبداع والتنوع
-        self.temperature = 0.85
-        self.top_p = 0.95
-        self.frequency_penalty = 0.5
-        self.presence_penalty = 0.5
+        # Google Sheets client (لتخزين التعلم والذاكرة)
+        self.sheets_client = sheets_client
         
-        # الذاكرة المؤقتة
-        self.user_sessions: Dict[int, Dict] = {}
-        self.user_memory: Dict[int, List[Dict]] = defaultdict(list)  # ملخصات أسبوعية
+        # إعدادات الذاكرة
+        self.max_history = 5   # عدد الرسائل السابقة التي نتذكرها من قاعدة البيانات
+        self.user_sessions = {}  # ذاكرة مؤقتة لحفظ سياق كل مستخدم: {user_id: {'last_tid': ..., 'last_data': ..., 'last_intent': ...}}
         
-        # نموذج التعلم الآلي
+        # مكونات التعلم الآلي
         self.classifier = None
-        self.vectorizer = None
-        self.needs_retraining = False
-        self.new_training_samples = []  # قائمة (text, intent_label)
-        self.last_training_date = datetime.now() - timedelta(days=1)
+        self.user_preferences = defaultdict(dict)  # {user_id: {'style': 'concise', ...}}
+        self.intent_labels = ['stats', 'specific_transaction', 'general', 'admin_change', 'unknown']
         
-        # تحميل النموذج إن وجد
-        self._load_or_init_model()
+        # تهيئة النموذج من البيانات المخزنة
+        self._init_ml_model()
         
-        # إنشاء أوراق الذاكرة الطويلة
+        # التأكد من وجود الأوراق اللازمة
         self._init_sheets()
-        
-        # تحميل بيانات التدريب السابقة من Sheets
-        self._load_training_data_from_sheets()
-        
-        # جدولة إعادة التدريب (ستُستدعى من main.py عبر scheduler)
-        logger.info("AI Assistant with self-learning initialized")
-    
-    # ------------------ نموذج التعلم الآلي ------------------
-    def _load_or_init_model(self):
-        if os.path.exists(self.model_path):
-            try:
-                saved = joblib.load(self.model_path)
-                self.classifier = saved['classifier']
-                self.vectorizer = saved['vectorizer']
-                logger.info("Loaded existing ML model")
-                return
-            except:
-                pass
-        # نموذج جديد
-        self.vectorizer = TfidfVectorizer(max_features=500, ngram_range=(1,2))
-        self.classifier = MultinomialNB()
-        logger.info("Initialized new ML model (will be trained later)")
-    
-    def _save_model(self):
-        joblib.dump({
-            'classifier': self.classifier,
-            'vectorizer': self.vectorizer
-        }, self.model_path)
-        logger.info("Model saved to disk")
-    
-    def _train_model(self, texts, labels):
-        if len(texts) < 10:
-            logger.warning(f"Not enough samples ({len(texts)}) to train")
-            return
-        X = self.vectorizer.fit_transform(texts)
-        self.classifier.fit(X, labels)
-        self._save_model()
-        logger.info(f"Retrained ML model on {len(texts)} samples")
-    
-    def _load_training_data_from_sheets(self):
+
+    # ================== التهيئة وإنشاء الأوراق ==================
+    def _init_sheets(self):
         if not self.sheets_client:
             return
-        ws = self.sheets_client.get_worksheet("ml_training_data")
-        if not ws:
-            return
-        records = ws.get_all_records()
-        texts, labels = [], []
-        for r in records:
-            if r.get('text') and r.get('label') and r.get('label') in self.INTENT_CATEGORIES:
-                texts.append(r['text'])
-                labels.append(r['label'])
-        if texts:
-            self._train_model(texts, labels)
-    
-    def _add_training_sample(self, text: str, intent: str, confidence: float = 1.0):
-        """أضف عينة تدريب جديدة (قد تكون من تفاعل ناجح)"""
-        if intent not in self.INTENT_CATEGORIES:
-            return
-        # تجنب التكرار التقريبي
-        for existing, _ in self.new_training_samples:
-            if existing == text or cosine_similarity_vector(text, existing) > 0.85:
-                return
-        self.new_training_samples.append((text, intent))
-        # حفظ فوري في Sheets
-        if self.sheets_client:
-            ws = self.sheets_client.get_worksheet("ml_training_data")
-            if ws:
-                ws.append_row([text, intent, datetime.now().isoformat(), confidence])
-        # إذا تجمع 50 عينة جديدة، نحتاج إلى إعادة التدريب
-        if len(self.new_training_samples) >= 50:
-            self.needs_retraining = True
-    
-    def _collect_implicit_feedback(self, user_id: int, user_message: str, ai_response: str, intent: str):
-        """تحليل رد الفعل الضمني لمعرفة ما إذا كانت الإجابة مفيدة أم لا"""
-        session = self.user_sessions.get(user_id, {})
-        last_user_msg = session.get("last_user_message", "")
-        # إذا كرر المستخدم نفس السؤال بعد الإجابة مباشرة → إجابة سيئة
-        if last_user_msg and cosine_similarity_vector(last_user_msg, user_message) > 0.8:
-            self._add_training_sample(user_message, "help", 0.2)  # عينة سلبية
-            logger.info(f"Implicit negative feedback from user {user_id}")
-        # إذا شكر أو قال "شكرا"، "ممتاز" → إجابة جيدة
-        if any(word in user_message.lower() for word in ["شكرا", "ممتاز", "تمام", "رائع", "احسنت"]):
-            self._add_training_sample(user_message, intent, 0.9)
-    
-    # ------------------ تحليل المشاعر والتفكير العميق ------------------
-    def _analyze_sentiment(self, text: str) -> str:
-        if SENTIMENT_AVAILABLE:
-            sia = SentimentIntensityAnalyzer()
-            score = sia.polarity_scores(text)['compound']
-            if score > 0.3:
-                return 'positive'
-            elif score < -0.3:
-                return 'negative'
-            return 'neutral'
-        return 'neutral'
-    
-    async def _deep_reasoning_chain(self, user_message: str, context: str) -> str:
-        """
-        سلسلة تفكير استنتاجي (Chain-of-Thought) قبل الإجابة على الأسئلة المعقدة.
-        نطلب من النموذج إظهار خطوات التفكير ثم استخلاص الإجابة النهائية.
-        """
-        prompt = f"""أنت خبير تحليل منطقي. قم بالتفكير خطوة بخطوة للإجابة على السؤال التالي.
-        
-السياق: {context}
-السؤال: {user_message}
-
-اكتب خطوات تفكيرك كما يلي:
-1. فهم المطلوب: ...
-2. تحليل المعطيات: ...
-3. الاستنتاجات الوسيطة: ...
-4. الإجابة النهائية (ملخص واضح):
-
-الإجابة النهائية يجب أن تكون في سطر منفصل يبدأ بـ "الإجابة النهائية:".
-"""
         try:
-            resp = self.client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.model_name,
-                temperature=0.3,
+            # الورقة الخاصة ببيانات التدريب على التصنيف
+            ws = self.sheets_client.get_worksheet("ml_training_data")
+            if not ws:
+                ws = self.sheets_client.spreadsheet.add_worksheet(title="ml_training_data", rows=1, cols=3)
+                ws.append_row(['text', 'label', 'timestamp'])
+            # الورقة الخاصة بتقييمات المستخدمين
+            ws = self.sheets_client.get_worksheet("ml_feedback")
+            if not ws:
+                ws = self.sheets_client.spreadsheet.add_worksheet(title="ml_feedback", rows=1, cols=6)
+                ws.append_row(['timestamp', 'user_id', 'user_message', 'ai_response', 'helpful', 'processed'])
+            # الورقة الخاصة بتفضيلات المستخدمين
+            ws = self.sheets_client.get_worksheet("user_preferences")
+            if not ws:
+                ws = self.sheets_client.spreadsheet.add_worksheet(title="user_preferences", rows=1, cols=4)
+                ws.append_row(['user_id', 'preference', 'value', 'updated_at'])
+            # الورقة الخاصة بسجل المحادثات الطويلة (للذاكرة الدائمة)
+            ws = self.sheets_client.get_worksheet("chat_history")
+            if not ws:
+                ws = self.sheets_client.spreadsheet.add_worksheet(title="chat_history", rows=1, cols=6)
+                ws.append_row(['timestamp', 'user_id', 'user_name', 'user_message', 'ai_response', 'is_admin'])
+        except Exception as e:
+            logger.error(f"خطأ في إنشاء أوراق التعلم الآلي: {e}")
+
+    def _init_ml_model(self):
+        """تحميل بيانات التدريب وبناء النموذج"""
+        try:
+            if self.sheets_client:
+                training_data = self._load_training_data()
+                if training_data:
+                    self._train_model(training_data)
+                    logger.info(f"✅ تم تدريب النموذج على {len(training_data)} عينة")
+                else:
+                    # نموذج فارغ (سيُدرب لاحقاً)
+                    self.classifier = Pipeline([
+                        ('tfidf', TfidfVectorizer(max_features=1000)),
+                        ('clf', MultinomialNB())
+                    ])
+                    logger.info("🆕 نموذج جديد (سيُدرب عند توفر بيانات)")
+            else:
+                self.classifier = None
+        except Exception as e:
+            logger.error(f"خطأ في تهيئة النموذج: {e}")
+            self.classifier = None
+
+    def _load_training_data(self):
+        """تحميل البيانات المصنفة من Google Sheets"""
+        try:
+            ws = self.sheets_client.get_worksheet("ml_training_data")
+            if not ws:
+                return []
+            records = ws.get_all_records()
+            if not records or 'text' not in records[0] or 'label' not in records[0]:
+                return []
+            return [(r['text'], r['label']) for r in records if r.get('text') and r.get('label')]
+        except Exception as e:
+            logger.error(f"فشل تحميل بيانات التدريب: {e}")
+            return []
+
+    def _train_model(self, training_data):
+        """تدريب نموذج تصنيف النية"""
+        if not training_data:
+            return
+        texts, labels = zip(*training_data)
+        self.classifier.fit(texts, labels)
+        logger.info(f"✅ النموذج مدرب على {len(texts)} عينة")
+
+    # ================== دوال التعلم الآلي ==================
+    def predict_intent(self, message):
+        """توقع نية الرسالة باستخدام النموذج المدرب"""
+        if self.classifier is None:
+            return 'general'
+        try:
+            pred = self.classifier.predict([message])[0]
+            if isinstance(pred, (int, np.integer)):
+                return self.intent_labels[pred] if pred < len(self.intent_labels) else 'general'
+            return pred
+        except Exception as e:
+            logger.error(f"خطأ في توقع النية: {e}")
+            return 'general'
+
+    def record_feedback(self, user_id, user_message, ai_response, helpful=True):
+        """تسجيل تقييم المستخدم للرد (مفيد/غير مفيد) لتحسين النموذج"""
+        if not self.sheets_client:
+            return
+        try:
+            ws = self.sheets_client.get_worksheet("ml_feedback")
+            if not ws:
+                return
+            now = datetime.now().isoformat()
+            self.sheets_client.safe_append_row(ws, [now, user_id, user_message, ai_response, '1' if helpful else '0', '0'], batch=True)
+            logger.debug(f"تم تسجيل تقييم المستخدم {user_id} (مفيد: {helpful})")
+        except Exception as e:
+            logger.error(f"فشل تسجيل التقييم: {e}")
+
+    def update_user_preference(self, user_id, preference, value):
+        """تحديث تفضيلات المستخدم (مثل نمط الرد، اللغة، إلخ)"""
+        self.user_preferences[user_id][preference] = value
+        self._save_user_preferences()
+
+    def _save_user_preferences(self):
+        """حفظ التفضيلات في Google Sheets"""
+        if not self.sheets_client:
+            return
+        try:
+            ws = self.sheets_client.get_worksheet("user_preferences")
+            if not ws:
+                return
+            # تنظيف المحتوى القديم (اختياري: تحديث الصفوف بدلاً من مسح الكل)
+            all_records = ws.get_all_values()
+            if len(all_records) > 1:
+                for i in range(len(all_records)-1, 0, -1):
+                    ws.delete_row(i+1)
+            now = datetime.now().isoformat()
+            for uid, prefs in self.user_preferences.items():
+                for pref, val in prefs.items():
+                    ws.append_row([uid, pref, val, now])
+        except Exception as e:
+            logger.error(f"فشل حفظ تفضيلات المستخدم: {e}")
+
+    def get_user_preference(self, user_id, preference, default=None):
+        return self.user_preferences.get(user_id, {}).get(preference, default)
+
+    # ================== دوال الذاكرة والسياق (جلسات المستخدمين) ==================
+    def _get_or_create_session(self, user_id):
+        """استرجاع جلسة المستخدم، أو إنشاؤها إذا لم توجد"""
+        if user_id not in self.user_sessions:
+            self.user_sessions[user_id] = {
+                'last_transaction_id': None,
+                'last_transaction_data': None,
+                'last_intent': None
+            }
+        return self.user_sessions[user_id]
+    
+    def _find_transaction_by_name(self, name):
+        """البحث عن معاملة باستخدام اسم صاحب المعاملة (التطابق التام أو الجزئي)"""
+        if not self.sheets_client:
+            return None
+        try:
+            records = self.sheets_client.get_latest_transactions_fast("manager")
+            name_clean = name.strip().lower()
+            # تطابق تام أولاً
+            for r in records:
+                if r.get('اسم صاحب المعاملة الثلاثي', '').strip().lower() == name_clean:
+                    return r
+            # تطابق جزئي
+            for r in records:
+                if name_clean in r.get('اسم صاحب المعاملة الثلاثي', '').strip().lower():
+                    return r
+            return None
+        except Exception as e:
+            logger.error(f"خطأ في البحث باسم المعاملة: {e}")
+            return None
+
+    def _extract_transaction_id_or_name(self, message):
+        """محاولة استخراج رقم معاملة (MUT-xxxx) أو اسم صاحب المعاملة"""
+        tid_match = re.search(r'MUT-\d{14}-\d{4}', message)
+        if tid_match:
+            return tid_match.group(0), None
+        # محاولة استخراج اسم: ابحث عن "معاملة (.*)" أو "اسمه (.*)"
+        name_match = re.search(r'معاملة\s+([^\s]+(?:\s+[^\s]+){0,4})', message)
+        if name_match:
+            return None, name_match.group(1).strip()
+        return None, None
+
+    def _get_conversation_history(self, user_id, limit=5):
+        """استرجاع آخر محادثات المستخدم من Google Sheets (للذاكرة الدائمة)"""
+        if not self.sheets_client:
+            return []
+        try:
+            ws = self.sheets_client.get_worksheet("chat_history")
+            if not ws:
+                return []
+            records = ws.get_all_records()
+            user_records = [r for r in records if str(r.get('user_id')) == str(user_id)]
+            user_records.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+            last_records = user_records[:limit][::-1]  # الأقدم أولاً
+            history = []
+            for rec in last_records:
+                history.append({"role": "user", "content": rec.get('user_message', '')})
+                history.append({"role": "assistant", "content": rec.get('ai_response', '')})
+            return history
+        except Exception as e:
+            logger.error(f"خطأ في استرجاع محفوظات المحادثة: {e}")
+            return []
+
+    def _save_conversation(self, user_id, user_name, user_message, ai_response, is_admin):
+        """تخزين المحادثة الحالية للاستفادة منها مستقبلاً (للذاكرة الدائمة)"""
+        if not self.sheets_client:
+            return
+        try:
+            ws = self.sheets_client.get_worksheet("chat_history")
+            if not ws:
+                return
+            now = datetime.now().isoformat()
+            self.sheets_client.safe_append_row(ws, [now, user_id, user_name, user_message, ai_response, str(is_admin)], batch=True)
+        except Exception as e:
+            logger.error(f"فشل حفظ المحادثة: {e}")
+
+    # ================== دوال فهم النية الأساسية ==================
+    def _understand_intent(self, message, is_admin=False):
+        """
+        فهم نية المستخدم – يستخدم النموذج المدرب إن وُجد، وإلا يعتمد على القواعد.
+        """
+        msg = message.lower()
+        params = {}
+        intent = "general"
+
+        # أولاً: محاولة استخدام النموذج المدرب (إن وُجد)
+        if self.classifier:
+            ml_intent = self.predict_intent(message)
+            if ml_intent in self.intent_labels:
+                if ml_intent == "admin_change" and is_admin:
+                    match = re.search(r'(MUT-\d{14}-\d{4})', message)
+                    if match:
+                        params['transaction_id'] = match.group(0)
+                    status_match = re.search(r'(مكتملة|قيد المعالجة|جديد|متأخرة)', msg)
+                    if status_match:
+                        params['new_status'] = status_match.group(0)
+                    return "admin_change_status", params
+                elif ml_intent == "specific_transaction":
+                    tid = re.search(r'MUT-\d{14}-\d{4}', message)
+                    if tid:
+                        params['transaction_id'] = tid.group(0)
+                        return "specific_transaction", params
+                elif ml_intent == "stats":
+                    return "stats", params
+
+        # القواعد التقليدية
+        # أسئلة متابعة بدون ذكر معاملة (تعتمد على السياق)
+        if any(word in msg for word in ['الحالة', 'حالة', 'status']):
+            intent = "ask_status"
+            return intent, params
+        if any(word in msg for word in ['وصلت', 'أين', 'مكان', 'مرحلة', 'تحولت']):
+            intent = "ask_location"
+            return intent, params
+        if any(word in msg for word in ['المسؤول', 'موظف', 'مسؤول']):
+            intent = "ask_employee"
+            return intent, params
+        if any(word in msg for word in ['متأخرة', 'تأخير', 'تأخر']):
+            intent = "ask_delayed"
+            return intent, params
+
+        # أوامر المدير باللغة الطبيعية
+        if is_admin:
+            if 'غير حالة' in msg:
+                match = re.search(r'غير حالة\s+(\S+)\s+إلى\s+(\S+)', msg)
+                if match:
+                    params['transaction_id'] = match.group(1)
+                    params['new_status'] = match.group(2)
+                    return "admin_change_status", params
+            if 'عين مسؤول' in msg or 'اسند إلى' in msg:
+                match = re.search(r'(?:عين مسؤول|اسند إلى)\s+(\S+)\s+(.+)', msg)
+                if match:
+                    params['transaction_id'] = match.group(1)
+                    params['employee'] = match.group(2).strip()
+                    return "admin_assign_employee", params
+
+        # استخراج رقم معاملة أو اسم صاحب معاملة
+        tid_match = re.search(r'MUT-\d{14}-\d{4}', message)
+        if tid_match:
+            params['transaction_id'] = tid_match.group(0)
+            return "specific_transaction", params
+
+        if any(word in msg for word in ['معاملتي', 'خاصتي', 'تابع معاملتي']):
+            return "my_transaction", params
+
+        if any(word in msg for word in ['إحصاء', 'إحصائيات', 'عدد', 'كم', 'stats', 'إجمالي', 'مجموع']):
+            intent = "stats"
+            if 'مكتملة' in msg:
+                params['status'] = 'مكتملة'
+            elif 'قيد المعالجة' in msg:
+                params['status'] = 'قيد المعالجة'
+            elif 'جديد' in msg:
+                params['status'] = 'جديد'
+            elif 'متأخرة' in msg:
+                params['status'] = 'متأخرة'
+            return intent, params
+
+        dept_match = re.search(r'قسم\s+([^\s]+(?:\s+[^\s]+)?)', msg)
+        if dept_match:
+            params['department'] = dept_match.group(1).strip()
+            return "department_transactions", params
+
+        emp_match = re.search(r'موظف\s+([^\s]+(?:\s+[^\s]+)?)', msg)
+        if emp_match:
+            params['employee'] = emp_match.group(1).strip()
+            return "employee_transactions", params
+
+        if 'مكتملة' in msg and ('معاملة' in msg or 'المعاملات' in msg):
+            params['status'] = 'مكتملة'
+            return "status_transactions", params
+        if 'قيد المعالجة' in msg:
+            params['status'] = 'قيد المعالجة'
+            return "status_transactions", params
+        if 'جديد' in msg and ('معاملة' in msg or 'المعاملات' in msg):
+            params['status'] = 'جديد'
+            return "status_transactions", params
+        if 'متأخرة' in msg:
+            params['status'] = 'متأخرة'
+            return "status_transactions", params
+
+        if 'ابحث' in msg or 'بحث' in msg:
+            search_match = re.search(r'(?:ابحث|بحث)\s+عن\s+(.+)', msg)
+            if search_match:
+                params['keyword'] = search_match.group(1).strip()
+                return "search_transactions", params
+
+        return intent, params
+
+    # ================== جلب البيانات من Sheets مع دعم السياق ==================
+    async def _fetch_data_by_intent(self, intent, params, user_id, is_admin=False):
+        if not self.sheets_client:
+            return "نظام قاعدة البيانات غير متصل حالياً."
+
+        # الحصول على جلسة المستخدم
+        session = self._get_or_create_session(user_id)
+        transaction_id = params.get('transaction_id')
+        transaction_name = params.get('transaction_name')
+        
+        # إذا لم نجد رقم معاملة ولا اسماً في الطلب الحالي، نستخدم آخر معاملة من الجلسة
+        if not transaction_id and not transaction_name:
+            if session.get('last_transaction_id'):
+                transaction_id = session['last_transaction_id']
+                logger.info(f"استخدام المعاملة المخزنة: {transaction_id}")
+            else:
+                # إذا لم توجد معاملة مخزنة، رد بأن المستخدم لم يحدد معاملة
+                return "لم أحدد أي معاملة. يرجى ذكر رقم المعاملة أو الاسم الكامل لصاحب المعاملة."
+
+        # إذا كان لدينا اسم (بدون رقم)، نبحث عن المعاملة و نخزنها في الجلسة
+        if transaction_name and not transaction_id:
+            data = self._find_transaction_by_name(transaction_name)
+            if not data:
+                return f"لم أجد معاملة باسم '{transaction_name}'. تأكد من الاسم أو استخدم رقم المعاملة."
+            transaction_id = data.get('ID')
+            session['last_transaction_data'] = data
+            session['last_transaction_id'] = transaction_id
+            session['last_intent'] = intent
+        elif transaction_id:
+            # إذا كان لدينا رقم، نجلب البيانات ونخزنها في الجلسة
+            data = self.sheets_client.get_latest_row_by_id_fast("manager", transaction_id)
+            if data:
+                session['last_transaction_data'] = data
+                session['last_transaction_id'] = transaction_id
+                session['last_intent'] = intent
+            else:
+                return f"لم أجد معاملة بالرقم {transaction_id}."
+
+        # الآن أصبح لدينا transaction_id و data (من الجلسة أو من البحث الجديد)
+        data = session.get('last_transaction_data')
+        if not data:
+            return "حدث خطأ في استرجاع بيانات المعاملة."
+
+        # معالجة النيات المختلفة باستخدام data
+        if intent == "specific_transaction" or intent == "my_transaction":
+            return self._format_transaction_context(data)
+
+        if intent == "ask_status":
+            status = data.get('الحالة', 'غير معروف')
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            return f"حالة معاملة {name} (رقم {transaction_id}) هي **{status}**."
+
+        if intent == "ask_location":
+            # يمكنك تخصيص أسماء الأعمدة حسب هيكل بياناتك
+            location = data.get('المؤسسة الحالية') or data.get('مرحلة') or data.get('آخر إجراء') or 'غير معروف'
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            return f"معاملة {name} وصلت إلى: **{location}**."
+
+        if intent == "ask_employee":
+            employee = data.get('الموظف المسؤول', 'غير معروف')
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            return f"المسؤول عن معاملة {name} هو **{employee}**."
+
+        if intent == "ask_delayed":
+            delay = data.get('التأخير', 'لا')
+            name = data.get('اسم صاحب المعاملة الثلاثي', '')
+            if delay == 'نعم':
+                return f"⚠️ معاملة {name} **متأخرة** حالياً."
+            else:
+                return f"✅ معاملة {name} **غير متأخرة**."
+
+        if intent == "admin_change_status" and is_admin:
+            tid = transaction_id
+            new_status = params.get('new_status')
+            if not new_status:
+                return "لم أفهم الحالة الجديدة."
+            valid = ['جديد', 'قيد المعالجة', 'مكتملة', 'متأخرة']
+            if new_status not in valid:
+                return f"الحالة `{new_status}` غير صالحة. الحالات المسموحة: {', '.join(valid)}"
+            success = self.sheets_client.update_transaction_field(tid, 'الحالة', new_status)
+            if success:
+                self.sheets_client.add_history_entry(tid, f"تغيير الحالة إلى {new_status} (عن طريق AI)", "AI")
+                # تحديث الجلسة بالبيانات الجديدة
+                updated_data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
+                if updated_data:
+                    session['last_transaction_data'] = updated_data
+                return f"✅ تم تغيير حالة المعاملة {tid} إلى **{new_status}**."
+            else:
+                return f"❌ فشل تغيير حالة المعاملة {tid}. تأكد من الرقم."
+
+        if intent == "admin_assign_employee" and is_admin:
+            tid = transaction_id
+            emp = params.get('employee')
+            if not emp:
+                return "لم أفهم اسم الموظف."
+            success = self.sheets_client.update_transaction_field(tid, 'الموظف المسؤول', emp)
+            if success:
+                self.sheets_client.add_history_entry(tid, f"تعيين {emp} كمسؤول (عن طريق AI)", "AI")
+                # تحديث الجلسة
+                updated_data = self.sheets_client.get_latest_row_by_id_fast("manager", tid)
+                if updated_data:
+                    session['last_transaction_data'] = updated_data
+                return f"✅ تم تعيين **{emp}** كمسؤول عن المعاملة {tid}."
+            else:
+                return f"❌ فشل التعيين. تأكد من رقم المعاملة."
+
+        # باقي النيات (stats, department, employee, search, إلخ) كما هي – لا تحتاج إلى سياق المعاملة
+        if intent == "stats":
+            records = self.sheets_client.get_latest_transactions_fast("manager")
+            total = len(records)
+            status_filter = params.get('status')
+            if status_filter:
+                filtered = [r for r in records if r.get('الحالة') == status_filter]
+                return f"عدد المعاملات ذات الحالة '{status_filter}' هو {len(filtered)} من إجمالي {total} معاملة."
+            completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
+            pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
+            delayed = sum(1 for r in records if r.get('التأخير') == 'نعم')
+            return (f"📊 إحصائيات المعاملات:\n- إجمالي: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}")
+
+        if intent == "department_transactions":
+            dept = params.get('department')
+            records = self.sheets_client.filter_transactions("manager", department=dept)
+            if not records:
+                return f"لا توجد معاملات في قسم '{dept}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in records[:5]])
+            more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
+            return f"📁 المعاملات في قسم {dept}: ({len(records)} معاملة)\n{sample}{more}"
+
+        if intent == "employee_transactions":
+            emp = params.get('employee')
+            records = self.sheets_client.filter_transactions("manager", employee=emp)
+            if not records:
+                return f"لا توجد معاملات للموظف '{emp}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in records[:5]])
+            more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
+            return f"👤 معاملات الموظف {emp}: ({len(records)} معاملة)\n{sample}{more}"
+
+        if intent == "status_transactions":
+            status = params.get('status')
+            records = self.sheets_client.filter_transactions("manager", status=status)
+            if not records:
+                return f"لا توجد معاملات بحالة '{status}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} (قسم: {r.get('القسم')})" for r in records[:5]])
+            more = f"\n... و{len(records)-5} معاملات أخرى" if len(records) > 5 else ""
+            return f"📋 المعاملات بحالة {status}: ({len(records)} معاملة)\n{sample}{more}"
+
+        if intent == "search_transactions":
+            keyword = params.get('keyword', '').lower()
+            records = self.sheets_client.get_latest_transactions_fast("manager")
+            found = []
+            for r in records:
+                if (keyword in str(r.get('ID', '')).lower() or
+                    keyword in str(r.get('اسم صاحب المعاملة الثلاثي', '')).lower() or
+                    keyword in str(r.get('القسم', '')).lower()):
+                    found.append(r)
+            if not found:
+                return f"لم أعثر على معاملات تحتوي على '{keyword}'."
+            sample = "\n".join([f"- {r.get('ID')}: {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in found[:5]])
+            more = f"\n... و{len(found)-5} معاملات أخرى" if len(found) > 5 else ""
+            return f"🔎 نتائج البحث عن '{keyword}': ({len(found)} معاملة)\n{sample}{more}"
+
+        # استعلام عام (نظرة عامة)
+        records = self.sheets_client.get_latest_transactions_fast("manager")
+        total = len(records)
+        completed = sum(1 for r in records if r.get('الحالة') == 'مكتملة')
+        pending = sum(1 for r in records if r.get('الحالة') in ('قيد المعالجة', 'جديد'))
+        delayed = sum(1 for r in records if r.get('التأخير') == 'نعم')
+        if is_admin:
+            recent = sorted(records, key=lambda x: x.get('آخر تعديل بتاريخ', ''), reverse=True)[:5]
+            recent_text = "\n".join([f"- {r.get('ID')} - {r.get('اسم صاحب المعاملة الثلاثي')} ({r.get('الحالة')})" for r in recent])
+            return (f"📊 نظرة عامة على النظام (للمدير):\n- إجمالي: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}\n\nأحدث المعاملات:\n{recent_text}")
+        else:
+            return (f"📊 إحصائيات عامة:\n- إجمالي المعاملات: {total}\n- مكتملة: {completed}\n- قيد المعالجة/جديد: {pending}\n- متأخرة: {delayed}")
+
+    # ================== توليد الرد باستخدام Groq ==================
+    async def _generate_response(self, user_message, data_context, user_name, is_admin=False, history_context=None):
+        system_prompt = self._build_system_prompt(is_admin)
+        user_prompt = self._build_user_prompt(user_message, data_context, history_context, user_name)
+        try:
+            chat_completion = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model=self.model,
+                temperature=0.7,
                 max_tokens=800
             )
-            full = resp.choices[0].message.content
-            # استخراج الإجابة النهائية
-            final_match = re.search(r'الإجابة النهائية:\s*(.+)', full, re.DOTALL)
-            if final_match:
-                return final_match.group(1).strip()
-            return full
+            return chat_completion.choices[0].message.content
         except Exception as e:
-            logger.error(f"Chain-of-thought failed: {e}")
-            return await self._handle_general_question(0, user_message, "", False)  # fallback
-    
-    # ------------------ فهم النية باستخدام النموذج المتعلم ------------------
-    def _classify_intent_ml(self, text: str) -> Tuple[str, float]:
-        if self.classifier is None:
-            # استخدام القواعد البسيطة كبداية
-            return self._rule_based_intent(text), 0.7
-        try:
-            X = self.vectorizer.transform([text])
-            probs = self.classifier.predict_proba(X)[0]
-            max_prob = max(probs)
-            if max_prob < 0.5:
-                return "general_question", max_prob
-            idx = probs.argmax()
-            intent = self.classifier.classes_[idx]
-            return intent, max_prob
-        except:
-            return self._rule_based_intent(text), 0.5
-    
-    def _rule_based_intent(self, text: str) -> str:
-        msg = text.lower()
-        if re.search(r'\b(مرحب|اهلا|سلام)\b', msg):
-            return "greeting"
-        if re.search(r'\b(مع السلامة|باي|وداعا)\b', msg):
-            return "farewell"
-        if re.search(r'MUT-\d{14}-\d{4}', text):
-            return "transaction_details"
-        if re.search(r'\b(معاملتي|خاصتي)\b', msg):
-            return "my_transaction"
-        if re.search(r'\b(حالة|status)\b', msg):
-            return "transaction_status"
-        if re.search(r'\b(سجل|تتبع|history)\b', msg):
-            return "transaction_history"
-        if re.search(r'\b(تحليل|analyze|اقتراح)\b', msg):
-            return "analyze"
-        if re.search(r'\b(إحصاء|عدد|كم)\b', msg):
-            return "stats"
-        if re.search(r'\b(ابحث|بحث|search)\b', msg):
-            return "search"
-        if re.search(r'\b(مساعدة|أزرار|help)\b', msg):
-            return "help"
-        return "general_question"
-    
-    # ------------------ تحليل المعاملات بطريقة عميقة ------------------
-    async def _deep_transaction_analysis(self, transaction_data: Dict, history: List[Dict], user_id: int) -> str:
-        """تحليل استنتاجي متعمق ينتج رؤى غير سطحية"""
-        # بناء ملخص تفصيلي
-        summary = f"""
-        المعاملة: {transaction_data.get('ID')}
-        الاسم: {transaction_data.get('اسم صاحب المعاملة الثلاثي')}
-        القسم: {transaction_data.get('القسم')}
-        الحالة الحالية: {transaction_data.get('الحالة')}
-        الموظف المسؤول: {transaction_data.get('الموظف المسؤول')}
-        التأخير: {transaction_data.get('التأخير')}
-        تاريخ التحويل: {transaction_data.get('تاريخ التحويل')}
-        سبب التحويل: {transaction_data.get('سبب التحويل')}
-        الملاحظات: {transaction_data.get('ملاحظات إضافية')}
-        """
-        timeline = "\n".join([f"- {h['time']}: {h['action']} ({h['user']})" for h in history[-8:]])
-        
-        prompt = f"""أنت خبير استشاري في تحسين العمليات الإدارية. قم بتحليل معمق للمعاملة التالية. يجب أن يتضمن تحليلك:
-- تحديد نقاط الضعف أو التأخير المحتملة
-- تقييم كفاءة الإجراءات الحالية
-- اقتراح 3 تحسينات قابلة للتنفيذ (بأولويات)
-- توقع العواقب إذا لم يتم التحسين
+            logger.error(f"Groq API error: {e}")
+            return f"عذراً، حدث خطأ أثناء توليد الرد. لكن بناءً على البيانات المتاحة:\n{data_context}"
 
-معلومات المعاملة:
-{summary}
-
-سجل التتبع:
-{timeline}
-
-اكتب تحليلك بأسلوب احترافي، مع أمثلة ملموسة. كن دقيقاً ومباشراً.
-"""
-        try:
-            response = self.client.chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=self.model_name,
-                temperature=0.4,
-                max_tokens=1200
+    def _build_system_prompt(self, is_admin):
+        base = (
+            "أنت مساعد ذكي ومحترف لإدارة المعاملات الإدارية. لديك إمكانية الوصول إلى بيانات حقيقية عن المعاملات. "
+            "أجب بالعربية الفصحى أو العامية المفهومة، بأسلوب مهذب ودقيق. "
+            "لا تختلق معلومات غير موجودة في البيانات. إذا لم تعرف الإجابة، قل ذلك بوضوح. "
+            "تذكر أن لديك ذاكرة مؤقتة للمستخدم: تذكر آخر معاملة تحدث عنها المستخدم ويمكنك الرد على أسئلة المتابعة دون الحاجة إلى إعادة ذكر رقم المعاملة أو الاسم."
+        )
+        if is_admin:
+            base += (
+                "\nأنت تتحدث مع **المدير**. يمكنك تنفيذ أوامر مثل: 'غير حالة MUT-xxxx إلى مكتملة' أو 'عين مسؤول MUT-xxxx أحمد'. "
+                "كن دقيقاً وأكد دائماً للمدير ما تم تنفيذه. استخدم البيانات التي أوصلناها لك."
             )
-            analysis = response.choices[0].message.content.strip()
-            # إضافة التوصيات في أزرار منفصلة؟ يمكن إرجاعها كنص منسق
-            return f"📊 **تحليل معمق للمعاملة {transaction_data.get('ID')}**\n\n{analysis}"
-        except Exception as e:
-            logger.error(f"Deep analysis error: {e}")
-            return "عذراً، حدث خطأ أثناء التحليل العميق."
-    
-    # ------------------ الدوال الأساسية (مشابهة للإصدار السابق ولكن محسنة) ------------------
-    async def get_response(self, user_message: str, user_id: int, user_name: str = "", is_admin: bool = False) -> Union[str, Dict]:
-        """الدالة الرئيسية: تتعلم وتفكر وتجيب"""
-        # 1. تحليل المشاعر
-        sentiment = self._analyze_sentiment(user_message)
-        
-        # 2. تصنيف النية باستخدام النموذج المتعلم
-        intent, confidence = self._classify_intent_ml(user_message)
-        logger.info(f"Intent: {intent} (confidence={confidence:.2f})")
-        
-        # 3. إذا كان النموذج غير واثق، ربما نطلب توضيحاً (Active Learning)
-        if confidence < 0.5 and intent == "general_question":
-            clarification = "لم أفهم جيداً، هل يمكنك توضيح سؤالك؟ أو استخدم الأزرار أدناه."
-            keyboard = self._get_main_keyboard(is_admin)
-            return {"type": "buttons", "text": clarification, "reply_markup": keyboard}
-        
-        # 4. معالجة النية (سيتم استدعاء دوال مشابهة للإصدار السابق لكن مع استخدام التحليل العميق)
-        answer = await self._process_intent(intent, user_message, user_id, user_name, is_admin, sentiment)
-        
-        # 5. جمع الملاحظات الضمنية
-        self._collect_implicit_feedback(user_id, user_message, answer, intent)
-        
-        # 6. تحديث الذاكرة الشخصية للمستخدم (ملخص أسبوعي)
-        self._update_user_memory(user_id, user_message, answer, intent)
-        
-        # 7. إذا كانت الإجابة قصيرة جداً أو متكررة، أعد صياغتها
-        if len(answer) < 30 and answer in self.user_sessions.get(user_id, {}).get("last_answers", []):
-            answer = "دعني أوضح بشكل أفضل: " + await self._rephrase_answer(user_message, answer)
-        
-        return answer
-    
-    async def _process_intent(self, intent, user_message, user_id, user_name, is_admin, sentiment):
-        # سيتم تنفيذ الإجراءات المناسبة باستخدام دوال مشابهة للنسخة السابقة
-        # ... (نختصر هنا لعرض المبادئ)
-        if intent == "analyze":
-            # تحليل عميق باستخدام chain-of-thought
-            return await self._handle_deep_analysis(user_id, user_message)
-        elif intent == "transaction_details":
-            return await self._handle_transaction_details(user_id, user_message)
         else:
-            return await self._handle_general_question(user_id, user_message, user_name, is_admin)
-    
-    async def _handle_deep_analysis(self, user_id, user_message):
-        # استخراج رقم المعاملة من الجلسة أو من النص
-        # ثم استدعاء _deep_transaction_analysis
-        # ...
-        return "تحليل مفصل (سيتم تنفيذه)"
-    
-    # ------------------ جدولة إعادة التدريب ------------------
-    def request_retraining_if_needed(self):
-        if self.needs_retraining or (datetime.now() - self.last_training_date) > timedelta(hours=24):
-            self._retrain_from_samples()
-            self.needs_retraining = False
-            self.last_training_date = datetime.now()
-    
-    def _retrain_from_samples(self):
-        if not self.new_training_samples:
-            return
-        texts, labels = zip(*self.new_training_samples)
-        # دمج مع بيانات التدريب القديمة (نحتفظ بآخر 1000 عينة)
-        old_texts, old_labels = self._get_old_training_data()
-        all_texts = list(old_texts) + list(texts)
-        all_labels = list(old_labels) + list(labels)
-        self._train_model(all_texts, all_labels)
-        self.new_training_samples.clear()
-    
-    def _get_old_training_data(self):
-        # استرجاع من الذاكرة أو من Sheets
-        # ...
-        return [], []
-    
-    # ------------------ أزرار ووظائف إضافية ------------------
-    def _get_main_keyboard(self, is_admin):
-        # كما هو موجود سابقاً
-        pass
-    
-    def _update_user_memory(self, user_id, user_message, ai_response, intent):
-        # تخزين ملخص في `user_context`
-        pass
+            base += (
+                "\nأنت تتحدث مع **مستخدم عادي**. يمكنه فقط الاستعلام عن معاملته الشخصية أو الإحصائيات العامة. "
+                "ساعده بلطف ولا تقم بأي تغييرات على البيانات."
+            )
+        return base
+
+    def _build_user_prompt(self, user_message, data_context, history_context, user_name):
+        prompt = f"المستخدم: {user_name}\n"
+        if history_context:
+            prompt += "**آخر محادثة:**\n"
+            for msg in history_context:
+                role = "المستخدم" if msg['role'] == 'user' else "المساعد"
+                prompt += f"{role}: {msg['content']}\n"
+        prompt += f"\n**سؤال المستخدم الحالي:** {user_message}\n\n"
+        if data_context:
+            prompt += f"**بيانات من النظام:**\n{data_context}\n\n"
+        prompt += "قدم إجابة مفيدة وواضحة بناءً على البيانات أعلاه."
+        return prompt
+
+    # ================== الدالة الرئيسية للرد ==================
+    async def get_response(self, user_message, user_id, user_name, is_admin=False):
+        """الدالة الرئيسية التي يستدعيها البوت"""
+        try:
+            # محاولة استخراج رقم أو اسم من الرسالة الحالية
+            tid, name = self._extract_transaction_id_or_name(user_message)
+            params = {}
+            if tid:
+                params['transaction_id'] = tid
+            if name:
+                params['transaction_name'] = name
+            
+            # فهم النية (قد تعتمد على الكلمات المفتاحية)
+            intent, extra_params = self._understand_intent(user_message, is_admin)
+            params.update(extra_params)
+            
+            # جلب البيانات بناءً على النية والمعاملات المستخرجة
+            data_context = await self._fetch_data_by_intent(intent, params, user_id, is_admin)
+            
+            # استرجاع سجل المحادثات السابقة (للذاكرة الطويلة)
+            history_context = self._get_conversation_history(user_id, limit=self.max_history)
+            
+            # توليد الرد باستخدام Groq (مع السياق)
+            response = await self._generate_response(user_message, data_context, user_name, is_admin, history_context)
+            
+            # حفظ المحادثة الحالية لاستخدامها مستقبلاً (للذاكرة الطويلة)
+            self._save_conversation(user_id, user_name, user_message, response, is_admin)
+            
+            return response
+        except Exception as e:
+            logger.error(f"خطأ عام في get_response: {e}", exc_info=True)
+            return "عذراً، حدث خطأ غير متوقع. يُرجى المحاولة مرة أخرى لاحقاً."
+
+    # ================== دوال مساعدة عامة ==================
+    def _get_user_transaction_id(self, chat_id):
+        if not self.sheets_client:
+            return None
+        try:
+            ws = self.sheets_client.get_worksheet("users")
+            if not ws:
+                return None
+            records = ws.get_all_records()
+            for row in records:
+                if str(row.get('chat_id')) == str(chat_id):
+                    return row.get('transaction_id')
+        except Exception as e:
+            logger.error(f"خطأ في استرجاع معاملة المستخدم: {e}")
+        return None
+
+    def _format_transaction_context(self, data):
+        if not data:
+            return "المعاملة غير موجودة."
+        lines = []
+        lines.append(f"**المعاملة رقم {data.get('ID', 'غير معروف')}**")
+        lines.append(f"- الاسم: {data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}")
+        lines.append(f"- القسم: {data.get('القسم', 'غير معروف')}")
+        lines.append(f"- الحالة: {data.get('الحالة', 'غير معروف')}")
+        lines.append(f"- الموظف المسؤول: {data.get('الموظف المسؤول', 'غير معروف')}")
+        if data.get('التأخير') == 'نعم':
+            lines.append("- ⚠️ **هذه المعاملة متأخرة**")
+        if data.get('تاريخ التحويل'):
+            lines.append(f"- تاريخ التحويل: {data.get('تاريخ التحويل')}")
+        if data.get('المرافقات'):
+            lines.append(f"- المرافقات: {data.get('المرافقات')}")
+        return "\n".join(lines)
+
+    async def analyze_transaction(self, transaction_data, history):
+        """تحليل معمق لمعاملة معينة (دالة منفصلة)"""
+        try:
+            summary = f"رقم المعاملة: {transaction_data.get('ID', 'غير معروف')}\n"
+            summary += f"الاسم: {transaction_data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف')}\n"
+            summary += f"القسم: {transaction_data.get('القسم', 'غير معروف')}\n"
+            summary += f"الحالة: {transaction_data.get('الحالة', 'غير معروف')}\n"
+            summary += f"التأخير: {transaction_data.get('التأخير', 'غير معروف')}\n"
+            summary += f"تاريخ التحويل: {transaction_data.get('تاريخ التحويل', 'غير معروف')}\n"
+            summary += f"الموظف المسؤول: {transaction_data.get('الموظف المسؤول', 'غير معروف')}\n\n"
+
+            timeline = "سجل التتبع:\n"
+            for entry in history:
+                timeline += f"- {entry['time']}: {entry['action']} (بواسطة: {entry['user']})\n"
+
+            prompt = f"""
+            أنت مساعد متخصص في تحليل المعاملات الإدارية. بناءً على المعلومات التالية، قدم:
+            1. ملخصاً مختصراً للمعاملة.
+            2. تقييماً للوضع الحالي (هل هناك تأخير، هل الإجراءات مناسبة).
+            3. توصيات أو اقتراحات للمتابعة (إن وجدت).
+            كن دقيقاً وموجزاً.
+
+            معلومات المعاملة:
+            {summary}
+
+            {timeline}
+            """
+            chat_completion = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": "أنت محلل معاملات خبير."},
+                    {"role": "user", "content": prompt}
+                ],
+                model=self.model,
+                temperature=0.5,
+                max_tokens=800
+            )
+            return chat_completion.choices[0].message.content
+        except Exception as e:
+            logger.error(f"خطأ في تحليل المعاملة: {e}")
+            return "عذراً، حدث خطأ أثناء تحليل المعاملة."
