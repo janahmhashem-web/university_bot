@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# main.py - النظام المتكامل لإدارة المعاملات (بوت تليجرام + واجهة ويب + Google Sheets + AI متعلم)
 import logging
 import sys
 import os
@@ -23,10 +24,11 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import gspread
 
+# استيراد الوحدات المخصصة
 from sheets import GoogleSheetsClient
 from config import Config
 from qr_generator import QRGenerator
-from ai_handler import AIAssistant
+from ai_handler import SelfLearningAIAssistant   # الإصدار المتطور
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -70,15 +72,16 @@ except Exception as e:
     logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
     sheets_client = None
 
-# ------------------ الذكاء الاصطناعي المتطور ------------------
+# ------------------ الذكاء الاصطناعي المتطور (ذاتي التعلم) ------------------
 ai_assistant = None
 try:
-    ai_assistant = AIAssistant(sheets_client=sheets_client)
-    logger.info("✅ تم تهيئة Groq AI مع التعلم الآلي والذاكرة")
+    ai_assistant = SelfLearningAIAssistant(sheets_client=sheets_client)
+    logger.info("✅ تم تهيئة AI متطور مع تعلم مستمر وتحليل عميق")
 except Exception as e:
     logger.error(f"❌ فشل تهيئة AI: {e}")
     ai_assistant = None
 
+# إذا كان sheets_client موجود، نتحقق من ورقة manager
 if sheets_client:
     ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
     if ws:
@@ -302,7 +305,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("⚠️ لم يتم ربط حسابك بأي معاملة بعد.")
     elif data == "cmd_ai_chat":
         context.user_data['awaiting'] = 'ai_chat'
-        await query.edit_message_text("🤖 *المساعد الذكي*\nأرسل سؤالك عن المعاملات (مثال: ما هي حالة معاملتي؟)، وسأجيب بذكاء.", parse_mode='Markdown')
+        await query.edit_message_text("🤖 *المساعد الذكي*\nأرسل سؤالك عن المعاملات، وسأجيب بذكاء.", parse_mode='Markdown')
     elif data == "cmd_search":
         context.user_data['awaiting'] = 'search'
         await query.edit_message_text("🔎 أدخل كلمة البحث (اسم، قسم، أو رقم معاملة):", parse_mode='Markdown')
@@ -680,6 +683,7 @@ async def feedback_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("الخدمة غير متاحة حالياً.")
 
 async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج الرسائل النصية باستخدام الذكاء الاصطناعي المتعلم"""
     text = update.message.text.strip()
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
@@ -699,7 +703,6 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.args = [text]
             await analyze(update, context)
         elif awaiting == 'ai_chat':
-            # استخدام المساعد الذكي المتطور
             if ai_assistant:
                 response = await ai_assistant.get_response(
                     user_message=text,
@@ -707,7 +710,15 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_name=update.effective_user.first_name or "مستخدم",
                     is_admin=is_admin
                 )
-                await update.message.reply_text(response)
+                # الرد قد يكون نصاً أو قاموساً يحوي أزراراً
+                if isinstance(response, dict) and response.get('type') == 'buttons':
+                    await update.message.reply_text(
+                        response['text'],
+                        parse_mode='Markdown',
+                        reply_markup=response['reply_markup']
+                    )
+                else:
+                    await update.message.reply_text(response, parse_mode='Markdown')
             else:
                 await update.message.reply_text("عذراً، المساعد الذكي غير متاح حالياً.")
         elif awaiting == 'adv_search':
@@ -748,7 +759,7 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, parse_mode='Markdown')
         return
     else:
-        # أي رسالة عادية: نمرر إلى المساعد الذكي
+        # أي رسالة عادية: نمرر إلى المساعد الذكي المتطور
         if ai_assistant:
             response = await ai_assistant.get_response(
                 user_message=text,
@@ -756,7 +767,14 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_name=update.effective_user.first_name or "مستخدم",
                 is_admin=is_admin
             )
-            await update.message.reply_text(response)
+            if isinstance(response, dict) and response.get('type') == 'buttons':
+                await update.message.reply_text(
+                    response['text'],
+                    parse_mode='Markdown',
+                    reply_markup=response['reply_markup']
+                )
+            else:
+                await update.message.reply_text(response, parse_mode='Markdown')
         else:
             await update.message.reply_text("عذراً، المساعد الذكي غير متاح حالياً.")
 
@@ -842,7 +860,7 @@ def api_submit():
             sheets_client = GoogleSheetsClient()
             global ai_assistant
             try:
-                ai_assistant = AIAssistant(sheets_client=sheets_client)
+                ai_assistant = SelfLearningAIAssistant(sheets_client=sheets_client)
             except Exception as e:
                 logger.error(f"Failed to reinit AI: {e}")
         except Exception as e:
@@ -959,6 +977,7 @@ def api_transactions():
 
 @app.route('/api/transaction/<id>', methods=['GET', 'POST'])
 def api_transaction(id):
+    """نقطة نهاية واحدة لتحديث معاملة - مع ضمان تنفيذ الحفظ مرة واحدة لكل طلب"""
     if not sheets_client:
         return jsonify({'success': False, 'message': 'غير متصل'}), 500
     if request.method == 'GET':
@@ -966,78 +985,67 @@ def api_transaction(id):
         if not data:
             return jsonify({'error': 'Not found'}), 404
         return jsonify(data)
-    else:
-        updates = request.json
-        old_data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
-        if not old_data:
-            return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
-        ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
-        headers = ws.row_values(1)
-        new_row = [''] * len(headers)
-        employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
-        now = datetime.now()
-        for idx, header in enumerate(headers):
-            value = old_data.get(header, '')
-            if header in updates:
-                value = updates[header]
-            if header == 'آخر تعديل بواسطة':
-                value = employee_name
-            elif header == 'آخر تعديل بتاريخ':
-                value = now.strftime("%Y-%m-%d %H:%M:%S")
-            elif header == 'عدد التعديلات':
-                try:
-                    value = int(old_data.get(header, 0)) + 1
-                except:
-                    value = 1
-            new_row[idx] = value
-        sheets_client.safe_append_row(ws, new_row, batch=True)
-        changes = []
-        for key, new_value in updates.items():
-            old_value = old_data.get(key, '')
-            if new_value != old_value:
-                if key == 'الموظف المسؤول':
-                    changes.append(f"👤 المسؤول الآن: {new_value}")
-                elif key == 'المؤسسة التالية':
-                    changes.append(f"🏢 المؤسسة الآن: {new_value}")
-                elif key == 'الحالة':
-                    changes.append(f"📌 الحالة الآن: {new_value}")
-                elif key == 'التأخير':
-                    changes.append(f"⚠️ التأخير الآن: {new_value}")
-                elif key == 'الأولوية':
-                    changes.append(f"⚡ الأولوية الآن: {new_value}")
-                elif key == 'تاريخ التحويل':
-                    changes.append(f"📅 تاريخ التحويل الآن: {new_value}")
-                elif key == 'سبب التحويل':
-                    changes.append(f"📝 سبب التحويل: {new_value}")
-                elif key == 'الموافق':
-                    changes.append(f"✅ تمت الموافقة من قبل: {new_value}")
-                elif key == 'ملاحظات إضافية':
-                    changes.append(f"💬 ملاحظات جديدة: {new_value}")
-                elif key == 'آخر إجراء':
-                    changes.append(f"🔄 آخر إجراء: {new_value}")
-                else:
-                    changes.append(f"📝 {key}: {new_value}")
-        user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n"
-        if changes:
-            user_message += "\n".join(changes)
-        else:
-            user_message += "تم تحديث بيانات المعاملة.\n"
-        user_message += f"\n🔍 لمتابعة كل التغييرات اضغط الزر أدناه."
-        changes_str = ', '.join(updates.keys())
-        sheets_client.add_history_entry(id, f"تحديث: {changes_str}", employee_name)
-        if background_loop and bot_app:
-            asyncio.run_coroutine_threadsafe(notify_user(id, user_message), background_loop)
-        if updates.get('الحالة') == 'مكتملة':
-            if hasattr(sheets_client, 'archive_transaction'):
-                old_dept = old_data.get('القسم', '')
-                archive_success = sheets_client.archive_transaction(id, department_name=old_dept)
-                if archive_success:
-                    return jsonify({'success': True, 'message': 'تم الحفظ والمعاملة مؤرشفة'})
-                else:
-                    return jsonify({'success': True, 'message': 'تم الحفظ ولكن فشلت الأرشفة'})
-            else:
-                logger.warning("archive_transaction غير متوفر في sheets_client")
-        return jsonify({'success': True, 'message': 'تم إضافة سجل التحديث بنجاح'})
+
+    # POST: تحديث المعاملة
+    # نمنع التحديث المتكرر باستخدام check للطلب (يمكن إضافة token فريد لكن الأسهل الاعتماد على حالة الزر في frontend)
+    # مع ذلك، للتأكيد نتحقق من وجود حقل timestamp في الطلب لمنع الإرسال المزدوج في فترة قصيرة
+    updates = request.json
+    # التحقق من أن الطلب ليس مكرراً (مثلاً نفس البيانات خلال ثانيتين لمعاملة واحدة)
+    # نستخدم simple cache بالذاكرة
+    if not hasattr(app, 'last_update_cache'):
+        app.last_update_cache = {}
+    cache_key = f"{id}_{hash(frozenset(updates.items()))}"
+    last_time = app.last_update_cache.get(cache_key)
+    if last_time and (datetime.now() - last_time).seconds < 3:
+        logger.warning(f"Duplicate update attempt for {id}, ignored")
+        return jsonify({'success': True, 'message': 'تم الحفظ مسبقاً (تم تجاهل التكرار)'})
+    app.last_update_cache[cache_key] = datetime.now()
+    # تنظيف cache قديم
+    for k in list(app.last_update_cache.keys()):
+        if (datetime.now() - app.last_update_cache[k]).seconds > 60:
+            del app.last_update_cache[k]
+
+    old_data = sheets_client.get_latest_row_by_id_fast(Config.SHEET_MANAGER, id)
+    if not old_data:
+        return jsonify({'success': False, 'message': 'المعاملة غير موجودة'}), 404
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    headers = ws.row_values(1)
+    new_row = [''] * len(headers)
+    employee_name = updates.get('الموظف المسؤول', old_data.get('الموظف المسؤول', 'غير معروف'))
+    now = datetime.now()
+    for idx, header in enumerate(headers):
+        value = old_data.get(header, '')
+        if header in updates:
+            value = updates[header]
+        if header == 'آخر تعديل بواسطة':
+            value = employee_name
+        elif header == 'آخر تعديل بتاريخ':
+            value = now.strftime("%Y-%m-%d %H:%M:%S")
+        elif header == 'عدد التعديلات':
+            try:
+                value = int(old_data.get(header, 0)) + 1
+            except:
+                value = 1
+        new_row[idx] = value
+    # الكتابة إلى الورقة
+    sheets_client.safe_append_row(ws, new_row, batch=True)
+    # تسجيل التغييرات في التاريخ
+    changes = []
+    for key, new_value in updates.items():
+        old_value = old_data.get(key, '')
+        if new_value != old_value:
+            changes.append(f"{key}: {new_value}")
+    if changes:
+        sheets_client.add_history_entry(id, f"تحديث: {', '.join(changes)}", employee_name)
+    # إرسال إشعار للمستخدم
+    user_message = f"✏️ *معاملتك {id} تم تحديثها*\n\n" + "\n".join(changes[:5])
+    if background_loop and bot_app:
+        asyncio.run_coroutine_threadsafe(notify_user(id, user_message), background_loop)
+    # أرشفة تلقائية إذا أصبحت مكتملة
+    if updates.get('الحالة') == 'مكتملة':
+        old_dept = old_data.get('القسم', '')
+        sheets_client.archive_transaction(id, department_name=old_dept)
+    return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
 @app.route('/api/history/<id>')
 def api_transaction_history(id):
@@ -1069,13 +1077,11 @@ def verify_email_page():
             return "صيغة البريد الإلكتروني غير صحيحة", 400
         if not sheets_client.is_email_allowed(email):
             return f"🚫 غير مصرح: البريد الإلكتروني {email} غير مسجل في النظام.", 403
-        # توليد توكن لا ينتهي (صلاحية دائمة)
-        token = sheets_client.generate_access_token(transaction_id, email, expiry_minutes=None)
+        token = sheets_client.generate_access_token(transaction_id, email, expiry_minutes=None)  # صلاحية دائمة
         if not token:
             return "حدث خطأ أثناء توليد رابط الدخول", 500
         base_url = request.host_url.rstrip('/')
         edit_url = f"{base_url}/transaction/{transaction_id}?token={token}"
-        logger.info(f"✅ إعادة التوجيه إلى: {edit_url} (صلاحية دائمة)")
         return redirect(edit_url)
     return '''
     <!DOCTYPE html>
@@ -1096,7 +1102,7 @@ def verify_email_page():
     <form method="POST"><input type="email" name="email" placeholder="example@it.jan.ah" required><button type="submit">تحقق</button></form></div></div></body></html>
     '''
 
-# ------------------ صفحة تعديل المعاملة ------------------
+# ------------------ صفحة تعديل المعاملة (مع منع الإرسال المتكرر) ------------------
 EDIT_HTML = """
 <!DOCTYPE html>
 <html dir="rtl" lang="ar">
@@ -1122,7 +1128,8 @@ EDIT_HTML = """
         .timeline-action { font-weight: 600; color: #1f2937; margin-bottom: 4px; }
         .timeline-user { font-size: 12px; color: #9ca3af; }
         .btn-save { background: linear-gradient(135deg, #667eea, #764ba2); transition: transform 0.2s, box-shadow 0.2s; }
-        .btn-save:hover { transform: translateY(-2px); box-shadow: 0 10px 20px -5px rgba(102,126,234,0.4); }
+        .btn-save:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .btn-save:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 10px 20px -5px rgba(102,126,234,0.4); }
         .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
         .info-card { background: #faf5ff; border-radius: 24px; padding: 20px; transition: all 0.2s; border: 1px solid #f3e8ff; }
         .info-card:hover { transform: translateY(-2px); box-shadow: 0 8px 15px rgba(0,0,0,0.05); }
@@ -1147,7 +1154,7 @@ EDIT_HTML = """
             <h2 class="text-lg font-semibold flex items-center gap-2 mb-5 text-purple-700">✏️ <span>تحديث البيانات</span></h2>
             <form id="editForm" class="space-y-5">
                 <div id="editable-fields" class="info-grid"></div>
-                <button type="submit" class="btn-save w-full text-white font-semibold py-3 rounded-xl transition shadow-md">💾 حفظ التغييرات</button>
+                <button type="submit" id="saveBtn" class="btn-save w-full text-white font-semibold py-3 rounded-xl transition shadow-md">💾 حفظ التغييرات</button>
             </form>
         </div>
         <div class="glass-card p-6 mb-6">
@@ -1159,6 +1166,8 @@ EDIT_HTML = """
     <script>
         const id = window.location.pathname.split('/').pop();
         document.getElementById('transaction-id').innerText = id;
+        let isSubmitting = false; // منع الإرسال المتكرر
+
         function showMessage(text, isError = false) {
             const msgDiv = document.getElementById('message');
             msgDiv.innerText = text;
@@ -1239,15 +1248,32 @@ EDIT_HTML = """
         });
         document.getElementById('editForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (isSubmitting) {
+                showMessage('جاري الحفظ بالفعل، انتظر قليلاً...', false);
+                return;
+            }
+            isSubmitting = true;
+            const saveBtn = document.getElementById('saveBtn');
+            const originalText = saveBtn.innerText;
+            saveBtn.disabled = true;
+            saveBtn.innerText = 'جاري الحفظ...';
             const formData = new FormData(e.target);
             const updates = Object.fromEntries(formData.entries());
-            const res = await fetch(`/api/transaction/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) });
-            const result = await res.json();
-            if (result.success) {
-                showMessage('✅ تم الحفظ بنجاح');
-                loadHistory();
-            } else {
-                showMessage('❌ فشل الحفظ', true);
+            try {
+                const res = await fetch(`/api/transaction/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updates) });
+                const result = await res.json();
+                if (result.success) {
+                    showMessage('✅ تم الحفظ بنجاح');
+                    loadHistory();
+                } else {
+                    showMessage('❌ فشل الحفظ: ' + (result.message || 'خطأ'), true);
+                }
+            } catch(err) {
+                showMessage('❌ خطأ في الاتصال', true);
+            } finally {
+                isSubmitting = false;
+                saveBtn.disabled = false;
+                saveBtn.innerText = originalText;
             }
         });
         function loadHistory() {
@@ -1320,7 +1346,7 @@ INDEX_HTML = """<!DOCTYPE html>
                         <th class="text-right px-4 py-3 text-purple-800">القسم</th>
                         <th class="text-right px-4 py-3 text-purple-800">آخر تعديل</th>
                         <th class="text-right px-4 py-3 text-purple-800"></th>
-                    </tr>
+                    </table>
                 </thead>
                 <tbody id="transactions"></tbody>
             </table>
@@ -1346,7 +1372,7 @@ INDEX_HTML = """<!DOCTYPE html>
             const tbody = document.getElementById('transactions');
             data.forEach(t => {
                 const statusClass = getStatusClass(t.status);
-                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></table><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></tr>`;
+                const row = `<tr class="shadow-sm"><td class="rounded-r-2xl font-mono text-sm">${t.id}</td><td>${t.name || '—'}</td><td><span class="status-badge ${statusClass}">${t.status || '—'}</span></td><td>${t.employee || '—'}</td><td>${t.department || '—'}</td><td class="text-left" dir="ltr">${formatDate(t.last_modified)}</td><td class="rounded-l-2xl"><a href="/transaction/${t.id}" class="btn-edit inline-block">✏️ تعديل</a></td></tr>`;
                 tbody.innerHTML += row;
             });
         });
@@ -1592,8 +1618,9 @@ def view_transaction_page(id):
 
 # ------------------ معالجة المعاملات الجديدة ------------------
 last_row_count = 0
+_last_row_lock = threading.Lock()
 
-def process_new_transaction(ws, row_number, new_row, transaction_id):
+def process_new_transaction(ws, row_number, new_row, transaction_id, base_url):
     try:
         if not transaction_id:
             now = datetime.now()
@@ -1607,7 +1634,6 @@ def process_new_transaction(ws, row_number, new_row, transaction_id):
             except ValueError:
                 ws.update_cell(row_number, 8, transaction_id)
             logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
-        base_url = request.host_url.rstrip('/')
         edit_link = f"{base_url}/transaction/{transaction_id}"
         hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
         try:
@@ -1651,21 +1677,23 @@ def check_new_transactions():
             return
         all_values = ws.get_all_values()
         current_count = len(all_values) - 1
-        if current_count > last_row_count:
-            logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
-            records = ws.get_all_records()
-            for i in range(last_row_count, current_count):
-                row_number = i + 2
-                new_row = records[i]
-                transaction_id = new_row.get('ID')
-                if not transaction_id:
-                    logger.warning(f"⚠️ صف {row_number} ليس له ID، سيتم معالجته لاحقًا")
-                    continue
-                executor.submit(process_new_transaction, ws, row_number, new_row, transaction_id)
-            last_row_count = current_count
-            logger.info(f"✅ تم تفويض المعاملات الجديدة للمعالجة المتوازية")
-        else:
-            logger.debug(f"لا توجد معاملات جديدة (last={last_row_count}, current={current_count})")
+        with _last_row_lock:
+            if current_count > last_row_count:
+                logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
+                records = ws.get_all_records()
+                base_url = Config.WEB_APP_URL.rstrip('/')  # استخدم الـ base_url من الكونفج
+                for i in range(last_row_count, current_count):
+                    row_number = i + 2
+                    new_row = records[i]
+                    transaction_id = new_row.get('ID')
+                    if not transaction_id:
+                        logger.warning(f"⚠️ صف {row_number} ليس له ID، سيتم معالجته لاحقًا")
+                        continue
+                    executor.submit(process_new_transaction, ws, row_number, new_row, transaction_id, base_url)
+                last_row_count = current_count
+                logger.info(f"✅ تم تفويض المعاملات الجديدة للمعالجة المتوازية")
+            else:
+                logger.debug(f"لا توجد معاملات جديدة (last={last_row_count}, current={current_count})")
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}", exc_info=True)
 
@@ -1679,7 +1707,12 @@ if sheets_client:
     scheduler = BackgroundScheduler()
     scheduler.start()
     scheduler.add_job(func=check_new_transactions, trigger=IntervalTrigger(seconds=30), id='check_transactions', replace_existing=True)
-    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 30 ثانية)")
+    # إضافة جدولة لإعادة تدريب AI
+    def scheduled_ai_retraining():
+        if ai_assistant and hasattr(ai_assistant, 'request_retraining_if_needed'):
+            ai_assistant.request_retraining_if_needed()
+    scheduler.add_job(func=scheduled_ai_retraining, trigger=IntervalTrigger(hours=6), id='ai_retraining', replace_existing=True)
+    logger.info("🔍 بدأت مراقبة المعاملات الجديدة (كل 30 ثانية) و جدولة إعادة تدريب AI كل 6 ساعات")
     atexit.register(lambda: scheduler.shutdown())
     atexit.register(lambda: executor.shutdown(wait=False))
 
