@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 import atexit
 import requests
 from collections import deque
-from flask import Flask, request, jsonify, render_template_string, Response, abort, redirect, url_for
+from flask import Flask, request, jsonify, render_template_string, Response, abort, redirect, url_for, session
 from flask_talisman import Talisman
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -31,7 +31,6 @@ import jwt
 import numpy as np
 from cachetools import TTLCache
 
-# استيراد الملفات الخاصة
 from config import Config
 from sheets import GoogleSheetsClient
 from qr_generator import QRGenerator
@@ -49,7 +48,15 @@ logger = logging.getLogger(__name__)
 MAX_WORKERS = 20
 executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
-# ================== تهيئة Flask ==================
+# ================== التحقق من المتغيرات البيئية ==================
+required_env_vars = ['GOOGLE_CREDENTIALS_JSON', 'SPREADSHEET_ID', 'TELEGRAM_BOT_TOKEN', 'WEB_APP_URL']
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    logger.error(f"❌ المتغيرات البيئية المفقودة: {', '.join(missing_vars)}")
+else:
+    logger.info("✅ جميع المتغيرات البيئية الأساسية موجودة")
+
+# ================== إعداد Flask ==================
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(32))
 
@@ -63,7 +70,11 @@ Talisman(app, content_security_policy={
 })
 
 # ================== إضافة Limiter (تحديد معدل الطلبات) ==================
-limiter = Limiter(app, key_func=get_remote_address, default_limits=["200 per day", "50 per hour"])
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"]
+)
 app.config['RATELIMIT_HEADERS_ENABLED'] = True
 
 # ================== تهيئة Google Sheets ==================
@@ -83,6 +94,15 @@ try:
 except Exception as e:
     logger.error(f"❌ فشل تهيئة AI: {e}")
     ai_assistant = None
+
+# ================== فحص ورقة manager عند بدء التشغيل ==================
+if sheets_client:
+    ws = sheets_client.get_worksheet(Config.SHEET_MANAGER)
+    if ws:
+        records = sheets_client.get_latest_transactions_fast(Config.SHEET_MANAGER)
+        logger.info(f"📊 عدد المعاملات الفريدة في ورقة manager: {len(records)}")
+    else:
+        logger.error("❌ الورقة manager غير موجودة")
 
 # ================== دوال مساعدة ==================
 async def notify_user(transaction_id, message):
@@ -224,6 +244,29 @@ async def auto_train_ai_model():
     except Exception as e:
         logger.error(f"❌ فشل التدريب التلقائي: {e}")
 
+# ================== دوال مساعدة للمدير ==================
+def get_all_transactions_list():
+    if not sheets_client:
+        return "⚠️ النظام غير متصل بقاعدة البيانات."
+    records = sheets_client.get_latest_transactions_sorted_fast(Config.SHEET_MANAGER)
+    if not records:
+        return "لا توجد معاملات حتى الآن."
+    result = "📋 *قائمة جميع المعاملات:*\n"
+    for r in records:
+        result += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')} - {r.get('الحالة', '')}\n"
+    return result
+
+def get_transactions_by_status(status):
+    if not sheets_client:
+        return "⚠️ النظام غير متصل بقاعدة البيانات."
+    records = sheets_client.filter_transactions(Config.SHEET_MANAGER, status=status)
+    if not records:
+        return f"لا توجد معاملات بالحالة '{status}'."
+    result = f"📋 *المعاملات بحالة {status}:*\n"
+    for r in records:
+        result += f"• `{r.get('ID', '')}` - {r.get('اسم صاحب المعاملة الثلاثي', '')}\n"
+    return result
+
 # ================== دوال البوت ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -237,7 +280,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if data:
                 save_user_chat(transaction_id, user_id)
                 await update.message.reply_text(
-                    f"✅ تم ربط حسابك بالمعاملة\n\n🆔 {transaction_id}\nاستعمل رقم معاملتك للحصول على المعلومات."
+                    f"✅ تم ربط حسابك بالمعاملة\n\n"
+                    f"🆔 {transaction_id}\n"
+                    f" استعمل رقم معاملتك (🆔)للحصول على معلومات حول معاملتك "
                 )
             else:
                 await update.message.reply_text("❌ المعاملة غير موجودة")
@@ -455,7 +500,7 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     user_id = update.effective_user.id
     is_admin = (user_id == Config.ADMIN_CHAT_ID)
-    
+
     if 'awaiting' in context.user_data:
         awaiting = context.user_data.pop('awaiting')
         if awaiting == 'id':
@@ -480,7 +525,7 @@ async def smart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("عذراً، المساعد الذكي غير متاح حالياً.")
         return
-    
+
     # الأوامر النصية المختصرة
     cmd_map = {
         'qr': ['qr', 'رمز', 'QR'],
@@ -789,12 +834,21 @@ def api_submit():
         department = request.form.get('department', '').strip()
         transaction_type = request.form.get('transaction_type', '').strip()
         attachments_text = request.form.get('attachments_text', '').strip()
+        uploaded_file = request.files.get('attachment_file')
         employee_email = request.form.get('employee_email', '').strip()
         client_ip = request.remote_addr
         
+        attachments = attachments_text
+        if uploaded_file and uploaded_file.filename:
+            file_data = uploaded_file.read()
+            file_link = sheets_client.upload_file_to_drive(file_data, uploaded_file.filename)
+            if file_link:
+                attachments = attachments_text + "\n" + file_link if attachments_text else file_link
+
         if not name or not phone:
             return jsonify({'success': False, 'error': 'الاسم والهاتف مطلوبان'}), 400
         
+        # التحقق من صلاحية الموظف إذا تم تقديم بريد
         if employee_email:
             if not sheets_client.is_qr_authorized(employee_email, required_role='qr_operator'):
                 sheets_client.log_employee_activity(
@@ -848,7 +902,7 @@ def api_submit():
             elif header == 'نوع المعاملة':
                 new_row[idx] = transaction_type
             elif header == 'المرافقات':
-                new_row[idx] = attachments_text
+                new_row[idx] = attachments
             elif header == 'ID':
                 new_row[idx] = transaction_id
             elif header == 'الرابط':
@@ -858,6 +912,14 @@ def api_submit():
         sheets_client.safe_append_row(ws, new_row, batch=True)
         logger.info(f"✅ تم إنشاء المعاملة {transaction_id}")
         sheets_client.add_history_entry(transaction_id, "تم إنشاء المعاملة", "API")
+        
+        # إضافة QR في الخلفية
+        def update_qr():
+            qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
+            if qr_ws:
+                qr_row = [transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', hyperlink_formula]
+                sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
+        executor.submit(update_qr)
         
         token = sheets_client.generate_access_token(transaction_id, employee_email or "user@system.com")
         edit_link_with_token = f"{base_url}/transaction/{transaction_id}?token={token}"
@@ -1012,6 +1074,8 @@ def api_transaction(id):
     # أرشفة تلقائية إذا أصبحت مكتملة
     if updates.get('الحالة') == 'مكتملة':
         sheets_client.archive_completed_transaction(id)
+        old_dept = old_data.get('القسم', '')
+        sheets_client.archive_transaction(id, department_name=old_dept)
     
     return jsonify({'success': True, 'message': 'تم الحفظ بنجاح'})
 
@@ -1342,6 +1406,39 @@ def forbidden(e):
 last_row_count = 0
 _last_row_lock = threading.Lock()
 
+def process_new_transaction(ws, row_number, new_row, transaction_id, base_url):
+    try:
+        if not transaction_id:
+            now = datetime.now()
+            date_str = now.strftime("%Y%m%d%H%M%S")
+            random_part = random.randint(1000, 9999)
+            transaction_id = f"MUT-{date_str}-{random_part}"
+            headers = ws.row_values(1)
+            try:
+                id_col = headers.index('ID') + 1
+                ws.update_cell(row_number, id_col, transaction_id)
+            except ValueError:
+                ws.update_cell(row_number, 8, transaction_id)
+            logger.info(f"🆔 تم توليد ID {transaction_id} للصف {row_number}")
+        edit_link = f"{base_url}/transaction/{transaction_id}"
+        hyperlink_formula = f'=HYPERLINK("{edit_link}", "تعديل المعاملة")'
+        try:
+            headers = ws.row_values(1)
+            link_col = headers.index('الرابط') + 1
+            ws.update_cell(row_number, link_col, hyperlink_formula)
+        except ValueError:
+            ws.update_cell(row_number, 21, hyperlink_formula)
+        qr_ws = sheets_client.get_worksheet(Config.SHEET_QR)
+        if qr_ws:
+            qr_row = [transaction_id, f'=IMAGE("{base_url}/qr_image/{transaction_id}")', hyperlink_formula]
+            sheets_client.safe_append_row(qr_ws, qr_row, batch=True)
+        history_ws = sheets_client.get_worksheet(Config.SHEET_HISTORY)
+        if history_ws:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sheets_client.safe_append_row(history_ws, [timestamp, transaction_id, "تم إنشاء المعاملة", "النظام"], batch=True)
+    except Exception as e:
+        logger.error(f"❌ خطأ في معالجة المعاملة {transaction_id}: {e}")
+
 def check_new_transactions():
     global last_row_count
     try:
@@ -1355,6 +1452,15 @@ def check_new_transactions():
         with _last_row_lock:
             if current_count > last_row_count:
                 logger.info(f"📦 تم اكتشاف {current_count - last_row_count} معاملات جديدة")
+                records = ws.get_all_records()
+                base_url = Config.WEB_APP_URL.rstrip('/')
+                for i in range(last_row_count, current_count):
+                    row_number = i + 2
+                    new_row = records[i]
+                    transaction_id = new_row.get('ID')
+                    if not transaction_id:
+                        continue
+                    executor.submit(process_new_transaction, ws, row_number, new_row, transaction_id, base_url)
                 last_row_count = current_count
     except Exception as e:
         logger.error(f"❌ خطأ في دالة المراقبة: {e}")
