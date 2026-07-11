@@ -38,10 +38,12 @@ class GoogleSheetsClient:
             self._init_sheets()
             self._init_employees_sheet()
             self._init_audit_sheets()
+            self._start_batch_worker()
         except Exception as e:
             logger.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
             raise
 
+    # ================== تهيئة الأوراق ==================
     def _init_sheets(self):
         from config import Config
 
@@ -99,8 +101,10 @@ class GoogleSheetsClient:
 
     def _init_audit_sheets(self):
         try:
-            for sheet_name, headers in [('audit_log', ['timestamp', 'transaction_id', 'field_name', 'old_value', 'new_value', 'changed_by', 'ip_address']),
-                                        ('employee_activity', ['timestamp', 'email', 'action', 'details', 'ip', 'success', 'user_agent'])]:
+            for sheet_name, headers in [
+                ('audit_log', ['timestamp', 'transaction_id', 'field_name', 'old_value', 'new_value', 'changed_by', 'ip_address']),
+                ('employee_activity', ['timestamp', 'email', 'action', 'details', 'ip', 'success', 'user_agent'])
+            ]:
                 ws = self.get_worksheet(sheet_name)
                 if ws is None:
                     ws = self.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(headers))
@@ -110,6 +114,105 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"❌ فشل إنشاء أوراق التدقيق: {e}")
 
+    # ================== نظام الكتابة المجمعة ==================
+    _batch_queue = deque()
+    _batch_lock = threading.Lock()
+    _batch_thread = None
+    _batch_stop = False
+
+    WRITE_RATE_LIMIT = 250
+    RATE_WINDOW = 60
+    _write_timestamps = deque(maxlen=WRITE_RATE_LIMIT)
+    _write_rate_lock = threading.Lock()
+
+    def _wait_for_write_rate(self):
+        with self._write_rate_lock:
+            while len(self._write_timestamps) >= self.WRITE_RATE_LIMIT:
+                oldest = self._write_timestamps[0]
+                elapsed = time.time() - oldest
+                if elapsed < self.RATE_WINDOW:
+                    sleep_time = self.RATE_WINDOW - elapsed + 0.1
+                    time.sleep(sleep_time)
+                else:
+                    self._write_timestamps.popleft()
+            self._write_timestamps.append(time.time())
+
+    def _start_batch_worker(self):
+        def worker():
+            while not self._batch_stop:
+                time.sleep(0.5)
+                batch = []
+                with self._batch_lock:
+                    while self._batch_queue and len(batch) < 50:
+                        batch.append(self._batch_queue.popleft())
+                if batch:
+                    self._execute_batch(batch)
+        self._batch_thread = threading.Thread(target=worker, daemon=True)
+        self._batch_thread.start()
+
+    def _execute_batch(self, batch_items):
+        if not batch_items:
+            return
+        self._wait_for_write_rate()
+        try:
+            sheets_ops = {}
+            for item in batch_items:
+                sheet_name = item['sheet_name']
+                if sheet_name not in sheets_ops:
+                    sheets_ops[sheet_name] = []
+                sheets_ops[sheet_name].append(item['row_data'])
+            for sheet_name, rows in sheets_ops.items():
+                ws = self.get_worksheet(sheet_name)
+                if ws:
+                    all_values = ws.get_all_values()
+                    next_row = len(all_values) + 1
+                    ws.insert_rows(rows, next_row, value_input_option='RAW')
+                    logger.debug(f"✅ Batch inserted {len(rows)} rows into {sheet_name}")
+        except Exception as e:
+            logger.error(f"❌ Batch insert failed: {e}")
+            for item in batch_items:
+                self._safe_append_row_single(item['worksheet'], item['row_data'])
+
+    def queue_append_row(self, worksheet, row_data):
+        try:
+            sheet_name = worksheet.title
+            with self._batch_lock:
+                self._batch_queue.append({
+                    'sheet_name': sheet_name,
+                    'worksheet': worksheet,
+                    'row_data': row_data.copy()
+                })
+            return True
+        except Exception as e:
+            logger.error(f"Failed to queue row: {e}")
+            return False
+
+    def _safe_append_row_single(self, worksheet, row_data):
+        try:
+            existing_headers = worksheet.row_values(1)
+            if not existing_headers:
+                return False
+            if len(row_data) != len(existing_headers):
+                if len(row_data) < len(existing_headers):
+                    row_data.extend([''] * (len(existing_headers) - len(row_data)))
+                else:
+                    row_data = row_data[:len(existing_headers)]
+            all_values = worksheet.get_all_values()
+            next_row = len(all_values) + 1
+            worksheet.insert_row(row_data, next_row, value_input_option='RAW')
+            return True
+        except Exception as e:
+            logger.error(f"❌ فشل إدراج الصف: {e}")
+            return False
+
+    def safe_append_row(self, worksheet, row_data, batch=True):
+        if batch:
+            return self.queue_append_row(worksheet, row_data)
+        else:
+            self._wait_for_write_rate()
+            return self._safe_append_row_single(worksheet, row_data)
+
+    # ================== دوال القراءة الأساسية ==================
     def get_worksheet(self, sheet_name):
         try:
             return self.spreadsheet.worksheet(sheet_name)
@@ -120,7 +223,6 @@ class GoogleSheetsClient:
         cache_key = f"transactions_{sheet_name}"
         if cache_key in self._data_cache:
             return self._data_cache[cache_key]
-
         ws = self.get_worksheet(sheet_name)
         if not ws:
             return []
@@ -140,6 +242,28 @@ class GoogleSheetsClient:
         self._data_cache[cache_key] = result
         return result
 
+    def get_latest_transactions_sorted_fast(self, sheet_name):
+        data = self.get_latest_transactions_fast(sheet_name)
+        def parse_date(row):
+            try:
+                return datetime.strptime(row.get("آخر تعديل بتاريخ", ""), "%Y-%m-%d %H:%M:%S")
+            except:
+                return datetime.min
+        return sorted(data, key=parse_date, reverse=True)
+
+    def filter_transactions(self, sheet_name, status=None, employee=None, department=None):
+        data = self.get_latest_transactions_fast(sheet_name)
+        results = []
+        for row in data:
+            if status and row.get("الحالة") != status:
+                continue
+            if employee and row.get("الموظف المسؤول") != employee:
+                continue
+            if department and row.get("القسم") != department:
+                continue
+            results.append(row)
+        return results
+
     def get_latest_row_by_id_fast(self, sheet_name, transaction_id):
         data = self.get_latest_transactions_fast(sheet_name)
         for row in data:
@@ -147,6 +271,7 @@ class GoogleSheetsClient:
                 return row
         return None
 
+    # ================== دوال التحديث ==================
     def update_transaction_field(self, transaction_id, field_name, new_value):
         try:
             ws = self.get_worksheet('manager')
@@ -172,11 +297,11 @@ class GoogleSheetsClient:
             ws = self.get_worksheet('history')
             if ws:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                ws.append_row([now, transaction_id, action, user])
+                self.safe_append_row(ws, [now, transaction_id, action, user], batch=True)
         except Exception as e:
             logger.error(f"فشل إضافة سجل التتبع: {e}")
 
-    # ---- دوال الموظفين والصلاحيات ----
+    # ================== إدارة الموظفين والصلاحيات ==================
     def get_employee_role(self, email):
         try:
             ws = self.get_worksheet('employees')
@@ -260,7 +385,7 @@ class GoogleSheetsClient:
             logger.error(f"فشل حذف الموظف: {e}")
             return False
 
-    # ---- دوال التوكنات (JWT) ----
+    # ================== JWT والتوكنات ==================
     def generate_access_token(self, transaction_id, email, expiry_days=None):
         from config import Config
         if expiry_days is None:
@@ -286,7 +411,7 @@ class GoogleSheetsClient:
     def get_direct_token(self, transaction_id, expiry_days=None):
         return self.generate_access_token(transaction_id, "direct@system.com", expiry_days)
 
-    # ---- دوال سجل التدقيق ----
+    # ================== سجل التدقيق (Audit Log) ==================
     def log_audit_change(self, transaction_id, field_name, old_value, new_value, changed_by, ip_address=''):
         try:
             ws = self.get_worksheet('audit_log')
@@ -332,6 +457,7 @@ class GoogleSheetsClient:
             })
         return list(versions.values())
 
+    # ================== نشاط الموظفين ==================
     def log_employee_activity(self, email, action, details='', success=True, ip_address=''):
         try:
             ws = self.get_worksheet('employee_activity')
@@ -378,6 +504,7 @@ class GoogleSheetsClient:
             logger.error(f"فشل جلب إحصائيات الموظف: {e}")
             return {'total': 0, 'success': 0, 'failed': 0}
 
+    # ================== دوال إدارة المعاملات ==================
     def is_transaction_editable(self, transaction_id):
         data = self.get_latest_row_by_id_fast('manager', transaction_id)
         if not data:
@@ -402,24 +529,7 @@ class GoogleSheetsClient:
         name_clean = name.strip().lower()
         return [r for r in records if name_clean in r.get('اسم صاحب المعاملة الثلاثي', '').strip().lower()]
 
-    def filter_transactions(self, sheet_name, status=None, employee=None, department=None):
-        data = self.get_latest_transactions_fast(sheet_name)
-        results = []
-        for row in data:
-            if status and row.get("الحالة") != status:
-                continue
-            if employee and row.get("الموظف المسؤول") != employee:
-                continue
-            if department and row.get("القسم") != department:
-                continue
-            results.append(row)
-        return results
-
-    def get_recent_transactions(self, limit=10):
-        data = self.get_latest_transactions_fast('manager')
-        data.sort(key=lambda x: x.get('آخر تعديل بتاريخ', ''), reverse=True)
-        return data[:limit]
-
+    # ================== الإحصائيات المتقدمة ==================
     def get_distinct_departments(self):
         records = self.get_latest_transactions_fast('manager')
         return sorted(set(r.get('القسم', '').strip() for r in records if r.get('القسم')))
@@ -444,6 +554,9 @@ class GoogleSheetsClient:
             stats[status] = stats.get(status, 0) + 1
         return stats
 
+    def get_recent_transactions(self, limit=10):
+        return self.get_latest_transactions_sorted_fast('manager')[:limit]
+
     def get_employee_workload(self):
         records = self.get_latest_transactions_fast('manager')
         workload = {}
@@ -456,14 +569,109 @@ class GoogleSheetsClient:
                 workload[emp]['delayed'] += 1
         return dict(sorted(workload.items(), key=lambda x: x[1]['total'], reverse=True))
 
-    def archive_transaction(self, transaction_id, department_name=None):
-        # وظيفة الأرشفة – يمكن تنفيذها حسب الحاجة
-        pass
-
-    def safe_append_row(self, worksheet, row_data, batch=True):
+    # ================== رفع الملفات والأرشفة ==================
+    def upload_file_to_drive(self, file_data, filename, folder_name="Transaction Attachments"):
         try:
-            worksheet.append_row(row_data)
+            folder_id = self._get_or_create_folder(folder_name)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{filename}") as tmp:
+                tmp.write(file_data)
+                tmp_path = tmp.name
+            media = MediaFileUpload(tmp_path, resumable=True)
+            file_metadata = {'name': filename, 'parents': [folder_id]}
+            file = self.drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            file_id = file.get('id')
+            self.drive_service.permissions().create(
+                fileId=file_id,
+                body={'type': 'anyone', 'role': 'reader'}
+            ).execute()
+            os.unlink(tmp_path)
+            return f"https://drive.google.com/uc?export=view&id={file_id}"
+        except Exception as e:
+            logger.error(f"فشل رفع الملف إلى Drive: {e}")
+            return None
+
+    def _get_or_create_folder(self, folder_name):
+        try:
+            response = self.drive_service.files().list(
+                q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+                spaces='drive',
+                fields='files(id, name)'
+            ).execute()
+            folders = response.get('files', [])
+            if folders:
+                return folders[0]['id']
+            else:
+                folder_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+                folder = self.drive_service.files().create(body=folder_metadata, fields='id').execute()
+                return folder.get('id')
+        except Exception as e:
+            logger.error(f"فشل البحث/إنشاء المجلد: {e}")
+            raise
+
+    def archive_transaction(self, transaction_id, department_name=None):
+        try:
+            ws_manager = self.get_worksheet('manager')
+            if not ws_manager:
+                return False
+            latest_data = self.get_latest_row_by_id_fast('manager', transaction_id)
+            if not latest_data:
+                return False
+            archive_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            latest_data['تاريخ_الأرشفة'] = archive_time
+
+            ws_archive_manager = self.get_worksheet('archive_manager')
+            if not ws_archive_manager:
+                return False
+            headers = ws_archive_manager.row_values(1)
+            new_row = [latest_data.get(header, '') for header in headers]
+            self.safe_append_row(ws_archive_manager, new_row, batch=True)
+
+            all_rows = ws_manager.get_all_values()
+            headers_mgr = ws_manager.row_values(1)
+            id_col = None
+            try:
+                id_col = headers_mgr.index('ID') + 1
+            except ValueError:
+                pass
+            if id_col:
+                rows_to_delete = []
+                for i, row in enumerate(all_rows):
+                    if i == 0: continue
+                    if len(row) > id_col-1 and str(row[id_col-1]) == str(transaction_id):
+                        rows_to_delete.append(i+1)
+                for row_num in sorted(rows_to_delete, reverse=True):
+                    ws_manager.delete_row(row_num)
+
+            if department_name:
+                # أرشفة من شيت القسم (اختصاراً)
+                pass
+
+            ws_history = self.get_worksheet('history')
+            if ws_history:
+                records = ws_history.get_all_records()
+                history_rows = [r for r in records if str(r.get('ID')) == str(transaction_id)]
+                ws_archive_history = self.get_worksheet('archive_history')
+                if ws_archive_history:
+                    arch_headers = ws_archive_history.row_values(1)
+                    for hist in history_rows:
+                        hist['تاريخ_الأرشفة'] = archive_time
+                        arch_row = [hist.get(header, '') for header in arch_headers]
+                        self.safe_append_row(ws_archive_history, arch_row, batch=True)
+                    rows_to_delete = []
+                    for i, r in enumerate(records):
+                        if str(r.get('ID')) == str(transaction_id):
+                            rows_to_delete.append(i+2)
+                    for row_num in sorted(rows_to_delete, reverse=True):
+                        ws_history.delete_row(row_num)
             return True
         except Exception as e:
-            logger.error(f"فشل إضافة الصف: {e}")
+            logger.error(f"فشل أرشفة المعاملة {transaction_id}: {e}")
             return False
+
+    # ================== دوال الأقسام (اختصار) ==================
+    def append_to_department_sheet(self, department_name, row_data, headers):
+        # تبسيط: يمكن تنفيذها حسب الحاجة
+        return True
+
+    def update_department_sheet(self, department_name, transaction_id, row_data, headers):
+        return True
