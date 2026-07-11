@@ -38,9 +38,11 @@ class AIAssistant:
         if not self.sheets_client:
             return
         try:
-            for sheet_name, headers in [("ml_training_data", ["text", "label", "timestamp"]),
-                                        ("ml_feedback", ["timestamp", "user_id", "user_message", "ai_response", "helpful", "processed"]),
-                                        ("user_preferences", ["user_id", "preference", "value", "updated_at"])]:
+            for sheet_name, headers in [
+                ("ml_training_data", ["text", "label", "timestamp"]),
+                ("ml_feedback", ["timestamp", "user_id", "user_message", "ai_response", "helpful", "processed"]),
+                ("user_preferences", ["user_id", "preference", "value", "updated_at"])
+            ]:
                 ws = self.sheets_client.get_worksheet(sheet_name)
                 if not ws:
                     ws = self.sheets_client.spreadsheet.add_worksheet(title=sheet_name, rows=1, cols=len(headers))
@@ -194,7 +196,6 @@ class AIAssistant:
         params = {}
         intent = "general"
 
-        # استخدام النموذج المدرب إن وُجد
         if self.classifier:
             ml_intent = self.predict_intent(message)
             if ml_intent in self.intent_labels:
@@ -214,7 +215,6 @@ class AIAssistant:
                 elif ml_intent == "stats":
                     return "stats", params
 
-        # القواعد التقليدية
         if any(word in msg for word in ['الحالة', 'حالة']):
             return "ask_status", params
         if any(word in msg for word in ['المسؤول', 'موظف']):
@@ -314,7 +314,6 @@ class AIAssistant:
         if not data:
             return "حدث خطأ في استرجاع بيانات المعاملة."
 
-        # بناء سياق منظم
         context = {
             "id": data.get('ID', 'غير معروف'),
             "name": data.get('اسم صاحب المعاملة الثلاثي', 'غير معروف'),
@@ -332,7 +331,6 @@ class AIAssistant:
             "notes": data.get('ملاحظات إضافية', '')
         }
 
-        # معالجة النيات
         if intent in ["specific_transaction", "my_transaction"]:
             return self._format_transaction_context(data)
         if intent == "ask_status":
