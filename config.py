@@ -12,7 +12,7 @@ class Config:
     WEB_APP_URL = os.getenv('WEB_APP_URL', 'https://your-app.up.railway.app')
     SPREADSHEET_ID = os.getenv('SPREADSHEET_ID')
     GOOGLE_CREDENTIALS_JSON = os.getenv('GOOGLE_CREDENTIALS_JSON')
-    
+
     # أسماء الأوراق
     SHEET_MANAGER = os.getenv('SHEET_MANAGER', 'manager')
     SHEET_HISTORY = os.getenv('SHEET_HISTORY', 'history')
@@ -22,23 +22,23 @@ class Config:
     SHEET_ARCHIVE_MANAGER = os.getenv('SHEET_ARCHIVE_MANAGER', 'archive_manager')
     SHEET_ARCHIVE_HISTORY = os.getenv('SHEET_ARCHIVE_HISTORY', 'archive_history')
     SHEET_ALLOWED_EMAILS = os.getenv('SHEET_ALLOWED_EMAILS', 'allowed_emails')
-    
+
     # API Keys
     GROQ_API_KEY = os.getenv('GROQ_API_KEY')
     EMAIL_USER = os.getenv('EMAIL_USER')
     EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
     EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp-relay.brevo.com')
     EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
-    
+
     # إعدادات الأمان
     JWT_SECRET = os.getenv('JWT_SECRET', os.urandom(32).hex())
     TOKEN_EXPIRY_DAYS = int(os.getenv('TOKEN_EXPIRY_DAYS', '7'))
-    
+
     # إعدادات الأداء
     CACHE_TTL = int(os.getenv('CACHE_TTL', '60'))
     RATE_LIMIT_REQUESTS = int(os.getenv('RATE_LIMIT_REQUESTS', '10'))
     RATE_LIMIT_PERIOD = int(os.getenv('RATE_LIMIT_PERIOD', '60'))
-    
+
     DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
     @classmethod
